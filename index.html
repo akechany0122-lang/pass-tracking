@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>One-Stroke Reality</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap"
+        rel="stylesheet">
+    <!-- MediaPipe Selfie Segmentation -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"
+        crossorigin="anonymous"></script>
+</head>
+
+<body>
+    <div id="loader">
+        <div class="loader-text">Loading System...</div>
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+    <!-- Hidden video for capture -->
+    <video id="webcam" autoplay playsinline muted></video>
+
+    <div class="ui-layer">
+        <nav class="menu-bar">
+            <header>
+                <img src="logo.png" alt="PASS PEOPLE" id="logo">
+            </header>
+            <button id="menuToggle" class="icon-button" title="Menu">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="square" stroke-linejoin="miter">
+                    <line x1="3" y1="12" x2="21" y2="12"></line>
+                    <line x1="3" y1="6" x2="21" y2="6"></line>
+                    <line x1="3" y1="18" x2="21" y2="18"></line>
+                </svg>
+            </button>
+            <div id="modeMenu" class="mode-menu hidden">
+                <button id="previewModeBtn">プレビューモード</button>
+                <button id="portraitModeBtn">縦画面モード</button>
+                <button id="recordingModeBtn">録画モード</button>
+            </div>
+        </nav>
+
+        <div id="recordingIndicator" class="recording-indicator hidden">
+            <span class="red-dot"></span> <span class="rec-text">REC 00:00</span>
+        </div>
+
+        <div class="controls">
+            <div class="control-row">
+                <label>DETAIL (感度)</label>
+                <input type="range" id="thresholdRange" min="10" max="150" value="30">
+            </div>
+            <div class="control-row">
+                <label>ABSTRACTION (抽象度)</label>
+                <input type="range" id="epsilonRange" min="1" max="20" value="3" step="0.5">
+            </div>
+            <div class="control-row">
+                <label>SPIKE (トゲ)</label>
+                <input type="range" id="spikeRange" min="1" max="100" value="50">
+            </div>
+            <div class="control-row">
+                <label>THICKNESS (太さ)</label>
+                <input type="range" id="thicknessRange" min="1" max="10" value="5" step="0.5">
+            </div>
+            <div class="control-row">
+                <label>SILHOUETTE (シルエット)</label>
+                <input type="range" id="silhouetteRange" min="0" max="100" value="80">
+            </div>
+            <div class="control-row button-row">
+                <button id="toggleBtn">CAMERA START</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="main.js"></script>
+    <!-- OpenCV.js -->
+    <script>
+        // OpenCV.jsのWASM初期化をフックするための設定
+        var Module = {
+            onRuntimeInitialized: function () {
+                // 初期化完了時にフラグを立てておくなど（今回はmain.jsでのポーリングに依存しています）
+                console.log("WASM Initialized");
+            }
+        };
+    </script>
+    <script async src="https://cdn.jsdelivr.net/gh/wallat/compiled-opencvjs/v4.2.0/opencv.js"
+        type="text/javascript"></script>
+</body>
+
+</html>
