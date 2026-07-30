@@ -118,9 +118,8 @@ const recordingIndicator = document.getElementById('recordingIndicator');
 const recText = recordingIndicator.querySelector('.rec-text');
 
 let mediaRecorder;
-let recordedChunks = [];
-let recordInterval;
-let recordStartTime;
+let fileStream;
+let frameIntervalId;
 
 // Preview Mode
 previewModeBtn.addEventListener('click', () => {
@@ -153,71 +152,117 @@ portraitModeBtn.addEventListener('click', () => {
 });
 
 // Recording Mode
-recordingModeBtn.addEventListener('click', () => {
+recordingModeBtn.addEventListener('click', async () => {
     modeMenu.classList.add('hidden');
     if (!state.recording) {
-        startRecording();
+        await startRecording();
     } else {
-        stopRecording();
+        await stopRecording();
     }
 });
 
-function startRecording() {
-    const stream = canvas.captureStream(30);
-    const options = { mimeType: 'video/webm; codecs=vp9' };
+async function startRecording() {
     try {
-        mediaRecorder = new MediaRecorder(stream, options);
-    } catch (e) {
-        console.warn("VP9 not supported, falling back to default webm");
+        const fileHandle = await window.showSaveFilePicker({
+            suggestedName: `timelapse_record_${new Date().getTime()}.webm`,
+            types: [{
+                description: 'WebM Video',
+                accept: { 'video/webm': ['.webm'] },
+            }],
+        });
+
+        fileStream = await fileHandle.createWritable();
+
+        // 画面がフリーズする問題（captureStream(0)が元のキャンバスの描画を制限してしまう仕様）を回避するため、
+        // 録画用の裏キャンバス（オフスクリーンキャンバス）を用意します。
+        const recordingCanvas = document.createElement('canvas');
+        recordingCanvas.width = canvas.width;
+        recordingCanvas.height = canvas.height;
+        const recCtx = recordingCanvas.getContext('2d', { alpha: false });
+
+        const stream = recordingCanvas.captureStream(0);
+        const videoTrack = stream.getVideoTracks()[0];
+
+        const options = { mimeType: 'video/webm; codecs=vp9', videoBitsPerSecond: 100000 };
         try {
-            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
-        } catch(e2) {
-            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder = new MediaRecorder(stream, options);
+        } catch (e) {
+            console.warn("VP9 not supported, falling back to default webm");
+            try {
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm', videoBitsPerSecond: 100000 });
+            } catch(e2) {
+                mediaRecorder = new MediaRecorder(stream, { videoBitsPerSecond: 100000 });
+            }
         }
+
+        mediaRecorder.ondataavailable = async (e) => {
+            if (e.data && e.data.size > 0 && fileStream) {
+                try {
+                    await fileStream.write(e.data);
+                } catch (err) {
+                    console.error("Write error:", err);
+                }
+            }
+        };
+
+        const captureIntervalMS = 1000; // 1秒に1コマ (1fps)
+
+        frameIntervalId = setInterval(() => {
+            if (mediaRecorder.state === 'recording') {
+                // 元のキャンバスの絵を裏キャンバスにコピーしてからキャプチャする
+                recCtx.drawImage(canvas, 0, 0, recordingCanvas.width, recordingCanvas.height);
+                videoTrack.requestFrame();
+            }
+        }, captureIntervalMS);
+
+        mediaRecorder.start(60000); // 60秒ごとにディスクへフラッシュ
+        
+        state.recording = true;
+        recordingModeBtn.textContent = "録画停止";
+        recordingModeBtn.classList.add('active');
+        
+        // UI Indicator for 2 seconds
+        recText.textContent = "REC START";
+        recordingIndicator.classList.remove('hidden');
+        setTimeout(() => {
+            if (state.recording) { // Stop中に呼ばれないようにする安全策
+                recordingIndicator.classList.add('hidden');
+            }
+        }, 2000);
+
+    } catch (error) {
+        console.error("録画の開始に失敗したか、キャンセルされました:", error);
     }
-
-    recordedChunks = [];
-    mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-            recordedChunks.push(e.data);
-        }
-    };
-    mediaRecorder.onstop = () => {
-        const blob = new Blob(recordedChunks, { type: 'video/webm' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        document.body.appendChild(a);
-        a.style = 'display: none';
-        a.href = url;
-        a.download = `PassPeople_Record_${new Date().getTime()}.webm`;
-        a.click();
-        window.URL.revokeObjectURL(url);
-    };
-
-    mediaRecorder.start();
-    state.recording = true;
-    recordingModeBtn.textContent = "録画停止";
-    recordingModeBtn.classList.add('active');
-    recordingIndicator.classList.remove('hidden');
-    
-    recordStartTime = Date.now();
-    recordInterval = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - recordStartTime) / 1000);
-        const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
-        const s = String(elapsed % 60).padStart(2, '0');
-        recText.textContent = `REC ${m}:${s}`;
-    }, 1000);
 }
 
-function stopRecording() {
-    if (mediaRecorder && state.recording) {
-        mediaRecorder.stop();
-        state.recording = false;
-        recordingModeBtn.textContent = "録画モード";
-        recordingModeBtn.classList.remove('active');
-        recordingIndicator.classList.add('hidden');
-        clearInterval(recordInterval);
-    }
+async function stopRecording() {
+    return new Promise((resolve) => {
+        if (frameIntervalId) {
+            clearInterval(frameIntervalId);
+            frameIntervalId = null;
+        }
+
+        if (mediaRecorder && state.recording) {
+            mediaRecorder.onstop = async () => {
+                if (fileStream) {
+                    try {
+                        await fileStream.close();
+                        fileStream = null;
+                    } catch (err) {
+                        console.error("ファイルのクローズに失敗しました:", err);
+                    }
+                }
+                resolve();
+            };
+            mediaRecorder.stop();
+            state.recording = false;
+            recordingModeBtn.textContent = "録画モード";
+            recordingModeBtn.classList.remove('active');
+            recordingIndicator.classList.add('hidden');
+        } else {
+            resolve();
+        }
+    });
 }
 
 // ----------------------------------------------------------------------------
