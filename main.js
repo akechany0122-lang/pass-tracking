@@ -219,7 +219,7 @@ recordingModeBtn.addEventListener('click', async () => {
 async function startRecording() {
     try {
         const fileHandle = await window.showSaveFilePicker({
-            suggestedName: `timelapse_record_${new Date().getTime()}.webm`,
+            suggestedName: `record_${new Date().getTime()}.webm`,
             types: [{
                 description: 'WebM Video',
                 accept: { 'video/webm': ['.webm'] },
@@ -228,26 +228,15 @@ async function startRecording() {
 
         fileStream = await fileHandle.createWritable();
 
-        // 画面がフリーズする問題（captureStream(0)が元のキャンバスの描画を制限してしまう仕様）を回避するため、
-        // 録画用の裏キャンバス（オフスクリーンキャンバス）を用意します。
-        const recordingCanvas = document.createElement('canvas');
-        recordingCanvas.width = canvas.width;
-        recordingCanvas.height = canvas.height;
-        const recCtx = recordingCanvas.getContext('2d', { alpha: false });
+        // 30fpsでキャンバスから直接ストリームを取得（手動フレーム要求はバグの温床なため撤廃）
+        const stream = canvas.captureStream(30);
 
-        const stream = recordingCanvas.captureStream(0);
-        const videoTrack = stream.getVideoTracks()[0];
-
-        const options = { mimeType: 'video/webm; codecs=vp9', videoBitsPerSecond: 100000 };
+        const options = { mimeType: 'video/webm; codecs=vp9', videoBitsPerSecond: 2500000 };
         try {
             mediaRecorder = new MediaRecorder(stream, options);
         } catch (e) {
             console.warn("VP9 not supported, falling back to default webm");
-            try {
-                mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm', videoBitsPerSecond: 100000 });
-            } catch(e2) {
-                mediaRecorder = new MediaRecorder(stream, { videoBitsPerSecond: 100000 });
-            }
+            mediaRecorder = new MediaRecorder(stream, { videoBitsPerSecond: 2500000 });
         }
 
         mediaRecorder.ondataavailable = async (e) => {
@@ -260,27 +249,18 @@ async function startRecording() {
             }
         };
 
-        const captureIntervalMS = 1000; // 1秒に1コマ (1fps)
-
-        frameIntervalId = setInterval(() => {
-            if (mediaRecorder.state === 'recording') {
-                // 元のキャンバスの絵を裏キャンバスにコピーしてからキャプチャする
-                recCtx.drawImage(canvas, 0, 0, recordingCanvas.width, recordingCanvas.height);
-                videoTrack.requestFrame();
-            }
-        }, captureIntervalMS);
-
-        mediaRecorder.start(60000); // 60秒ごとにディスクへフラッシュ
+        // 1秒ごとにチャンクを書き出してデータ損失を防ぐ
+        mediaRecorder.start(1000);
         
         state.recording = true;
         recordingModeBtn.textContent = "録画停止";
         recordingModeBtn.classList.add('active');
         
-        // UI Indicator for 2 seconds
+        // UI Indicator
         recText.textContent = "REC START";
         recordingIndicator.classList.remove('hidden');
         setTimeout(() => {
-            if (state.recording) { // Stop中に呼ばれないようにする安全策
+            if (state.recording) {
                 recordingIndicator.classList.add('hidden');
             }
         }, 2000);
@@ -292,11 +272,6 @@ async function startRecording() {
 
 async function stopRecording() {
     return new Promise((resolve) => {
-        if (frameIntervalId) {
-            clearInterval(frameIntervalId);
-            frameIntervalId = null;
-        }
-
         if (mediaRecorder && state.recording) {
             mediaRecorder.onstop = async () => {
                 if (fileStream) {
@@ -423,7 +398,7 @@ async function startCamera() {
 
         initCV();
         initMediaPipe();
-        requestAnimationFrame(processFrame);
+        loopWorker.postMessage('start'); // Start the background loop
 
     } catch (e) {
         console.error(e);
@@ -435,6 +410,8 @@ function stopCamera() {
     if (!state.streaming) return;
     state.streaming = false;
     toggleBtn.textContent = "CAMERA START";
+    
+    loopWorker.postMessage('stop'); // Stop the background loop
 
     const stream = video.srcObject;
     if (stream) {
@@ -550,6 +527,7 @@ function initMediaPipe() {
                 let cnt = internalContours.get(i);
                 let minArea = 10 + (state.silhouette * 0.5);
                 if (cv.contourArea(cnt) < minArea && cnt.rows < 10) {
+                    cnt.delete();
                     continue;
                 }
                 let approx = new cv.Mat();
@@ -565,6 +543,7 @@ function initMediaPipe() {
                     allPaths.push(points);
                 }
                 approx.delete();
+                cnt.delete();
             }
             internalContours.delete();
             internalHierarchy.delete();
@@ -615,11 +594,34 @@ function initMediaPipe() {
 
 // Optimization: Reuse temp canvas
 let tempCanvas = document.createElement('canvas');
-let tempCtx = tempCanvas.getContext('2d');
+let tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+
+// Web Workerを利用して裏画面でも処理を止めない（ブラウザのタイマー制限を回避）
+const workerCode = `
+    let timer = null;
+    self.onmessage = function(e) {
+        if (e.data === 'start') {
+            if(timer) clearInterval(timer);
+            timer = setInterval(() => {
+                self.postMessage('tick');
+            }, 1000 / 30); // 30 FPS
+        } else if (e.data === 'stop') {
+            clearInterval(timer);
+            timer = null;
+        }
+    };
+`;
+const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+const loopWorker = new Worker(URL.createObjectURL(workerBlob));
+
+loopWorker.onmessage = () => {
+    if (state.streaming && !state.processingInProgress) {
+        processFrame();
+    }
+};
 
 async function processFrame() {
     if (!state.streaming || state.processingInProgress) {
-        requestAnimationFrame(processFrame);
         return;
     }
 
@@ -631,8 +633,6 @@ async function processFrame() {
         console.error("MediaPipe Error:", e);
         state.processingInProgress = false;
     }
-
-    requestAnimationFrame(processFrame);
 }
 
 function solveOneStrokeScribble(paths) {
