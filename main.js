@@ -323,6 +323,9 @@ async function stopRecording() {
 // ----------------------------------------------------------------------------
 
 async function startCamera() {
+    let stream;
+    let selectedDeviceId = document.getElementById('cameraSelect') ? document.getElementById('cameraSelect').value : null;
+
     try {
         let videoConstraints = {
             width: { ideal: 1280 },
@@ -330,7 +333,6 @@ async function startCamera() {
             facingMode: 'user'
         };
 
-        const selectedDeviceId = document.getElementById('cameraSelect') ? document.getElementById('cameraSelect').value : null;
         if (selectedDeviceId) {
             videoConstraints = {
                 width: { ideal: 1280 },
@@ -339,10 +341,27 @@ async function startCamera() {
             };
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
+        stream = await navigator.mediaDevices.getUserMedia({
             video: videoConstraints,
             audio: false
         });
+    } catch (e) {
+        console.warn("カメラの起動に失敗しました（高解像度での要求エラーの可能性）。解像度指定を外して再試行します。", e);
+        try {
+            // フォールバック：解像度指定を外して再試行（一部の仮想カメラ対策）
+            let fallbackConstraints = selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : true;
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: fallbackConstraints,
+                audio: false
+            });
+        } catch (fallbackError) {
+            console.error(fallbackError);
+            alert("カメラへの接続に失敗しました。\nエラー名: " + fallbackError.name + "\nメッセージ: " + fallbackError.message + "\n\n※他のアプリ（ZoomやOBS、メーカー公式のカメラ操作アプリ等）がカメラを使用していないか確認してください。");
+            return;
+        }
+    }
+
+    try {
         video.srcObject = stream;
         await video.play();
 
