@@ -534,9 +534,7 @@ function initMediaPipe() {
             let imageData = tempCtx.getImageData(0, 0, procWidth, procHeight);
             src.data.set(imageData.data);
             cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-            let ksize = new cv.Size(5, 5);
-            cv.GaussianBlur(gray, gray, ksize, 0);
-            ksize.delete();
+            cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
             cv.Canny(gray, edges, state.threshold, state.threshold * 3);
 
             // C. Find Contours
