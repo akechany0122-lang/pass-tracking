@@ -96,6 +96,59 @@ document.getElementById('silhouetteRange').addEventListener('input', (e) => {
     state.silhouette = parseInt(e.target.value);
 });
 
+// Camera Selection Logic
+const cameraSelect = document.getElementById('cameraSelect');
+
+async function getCameras() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+        
+        // Preserve current selection if any
+        const currentVal = cameraSelect.value;
+        cameraSelect.innerHTML = '<option value="">デフォルト</option>';
+        
+        videoDevices.forEach((device, index) => {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.text = device.label || `カメラ ${index + 1}`;
+            if (device.deviceId === currentVal) option.selected = true;
+            cameraSelect.appendChild(option);
+        });
+    } catch (e) {
+        console.error('カメラ一覧の取得に失敗しました', e);
+    }
+}
+
+// Request permission to get labels, then list cameras
+async function requestCameraPermissionAndList() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream.getTracks().forEach(track => track.stop());
+        await getCameras();
+    } catch (e) {
+        console.warn("Permission denied or error getting labels", e);
+        await getCameras(); // List anyway (without labels usually)
+    }
+}
+
+// Initialize camera list
+requestCameraPermissionAndList();
+
+// Restart camera if selection changes and streaming is active
+if (cameraSelect) {
+    cameraSelect.addEventListener('change', () => {
+        if (state.streaming) {
+            stopCamera();
+            startCamera();
+        }
+    });
+}
+
+// Also update list when devices change (e.g. plug in a camera)
+navigator.mediaDevices.addEventListener('devicechange', getCameras);
+
 const menuToggle = document.getElementById('menuToggle');
 const modeMenu = document.getElementById('modeMenu');
 
@@ -271,12 +324,23 @@ async function stopRecording() {
 
 async function startCamera() {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
+        let videoConstraints = {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: 'user'
+        };
+
+        const selectedDeviceId = document.getElementById('cameraSelect') ? document.getElementById('cameraSelect').value : null;
+        if (selectedDeviceId) {
+            videoConstraints = {
                 width: { ideal: 1280 },
                 height: { ideal: 720 },
-                facingMode: 'user'
-            },
+                deviceId: { exact: selectedDeviceId }
+            };
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: videoConstraints,
             audio: false
         });
         video.srcObject = stream;
