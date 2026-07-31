@@ -20,6 +20,8 @@ let state = {
     recording: false
 };
 
+let wakeLock = null; // Wake Lock API for keeping screen awake
+
 // Elements
 const video = document.getElementById('webcam');
 const canvas = document.getElementById('canvas');
@@ -319,6 +321,30 @@ async function stopRecording() {
 }
 
 // ----------------------------------------------------------------------------
+// Wake Lock (Prevent screen from sleeping)
+// ----------------------------------------------------------------------------
+
+async function requestWakeLock() {
+    try {
+        if ('wakeLock' in navigator) {
+            wakeLock = await navigator.wakeLock.request('screen');
+            console.log('Screen Wake Lock acquired');
+            wakeLock.addEventListener('release', () => {
+                console.log('Screen Wake Lock released');
+            });
+        }
+    } catch (err) {
+        console.error(`Wake Lock error: ${err.name}, ${err.message}`);
+    }
+}
+
+document.addEventListener('visibilitychange', async () => {
+    if (wakeLock !== null && document.visibilityState === 'visible' && state.streaming) {
+        await requestWakeLock();
+    }
+});
+
+// ----------------------------------------------------------------------------
 // Camera
 // ----------------------------------------------------------------------------
 
@@ -386,6 +412,8 @@ async function startCamera() {
         state.streaming = true;
         toggleBtn.textContent = "CAMERA STOP";
 
+        requestWakeLock(); // Prevent screen sleep
+
         if (src) {
             src.delete(); gray.delete(); edges.delete(); constMat.delete();
             if (maskMat) maskMat.delete();
@@ -412,6 +440,10 @@ function stopCamera() {
         stream.getTracks().forEach(t => t.stop());
     }
     video.srcObject = null;
+
+    if (wakeLock !== null) {
+        wakeLock.release().then(() => { wakeLock = null; });
+    }
 
     // Cleanup CV
     if (src) {
@@ -502,7 +534,9 @@ function initMediaPipe() {
             let imageData = tempCtx.getImageData(0, 0, procWidth, procHeight);
             src.data.set(imageData.data);
             cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-            cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+            let ksize = new cv.Size(5, 5);
+            cv.GaussianBlur(gray, gray, ksize, 0);
+            ksize.delete();
             cv.Canny(gray, edges, state.threshold, state.threshold * 3);
 
             // C. Find Contours
@@ -516,7 +550,10 @@ function initMediaPipe() {
             for (let i = 0; i < internalContours.size(); ++i) {
                 let cnt = internalContours.get(i);
                 let minArea = 10 + (state.silhouette * 0.5);
-                if (cv.contourArea(cnt) < minArea && cnt.rows < 10) continue;
+                if (cv.contourArea(cnt) < minArea && cnt.rows < 10) {
+                    cnt.delete();
+                    continue;
+                }
                 let approx = new cv.Mat();
                 cv.approxPolyDP(cnt, approx, state.epsilon, true);
                 if (approx.rows > 1) {
@@ -530,6 +567,7 @@ function initMediaPipe() {
                     allPaths.push(points);
                 }
                 approx.delete();
+                cnt.delete();
             }
             internalContours.delete();
             internalHierarchy.delete();
@@ -541,7 +579,10 @@ function initMediaPipe() {
 
             for (let i = 0; i < maskContours.size(); ++i) {
                 let cnt = maskContours.get(i);
-                if (cv.contourArea(cnt) < 100) continue;
+                if (cv.contourArea(cnt) < 100) {
+                    cnt.delete();
+                    continue;
+                }
                 let approx = new cv.Mat();
                 cv.approxPolyDP(cnt, approx, state.epsilon * 0.5, true);
                 if (approx.rows > 1) {
@@ -555,6 +596,7 @@ function initMediaPipe() {
                     allPaths.push(points);
                 }
                 approx.delete();
+                cnt.delete();
             }
             maskContours.delete();
             maskHierarchy.delete();
