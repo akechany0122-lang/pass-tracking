@@ -549,7 +549,6 @@ function initMediaPipe() {
                 let cnt = internalContours.get(i);
                 let minArea = 10 + (state.silhouette * 0.5);
                 if (cv.contourArea(cnt) < minArea && cnt.rows < 10) {
-                    cnt.delete();
                     continue;
                 }
                 let approx = new cv.Mat();
@@ -565,7 +564,6 @@ function initMediaPipe() {
                     allPaths.push(points);
                 }
                 approx.delete();
-                cnt.delete();
             }
             internalContours.delete();
             internalHierarchy.delete();
@@ -578,7 +576,6 @@ function initMediaPipe() {
             for (let i = 0; i < maskContours.size(); ++i) {
                 let cnt = maskContours.get(i);
                 if (cv.contourArea(cnt) < 100) {
-                    cnt.delete();
                     continue;
                 }
                 let approx = new cv.Mat();
@@ -594,7 +591,6 @@ function initMediaPipe() {
                     allPaths.push(points);
                 }
                 approx.delete();
-                cnt.delete();
             }
             maskContours.delete();
             maskHierarchy.delete();
