@@ -398,7 +398,14 @@ async function startCamera() {
 
         initCV();
         initMediaPipe();
-        loopWorker.postMessage('start'); // Start the background loop
+        
+        // メインスレッドでのタイマー駆動に変更（Web Workerによるセキュリティブロック回避のため）
+        if (state.loopTimer) clearInterval(state.loopTimer);
+        state.loopTimer = setInterval(() => {
+            if (state.streaming && !state.processingInProgress) {
+                processFrame();
+            }
+        }, 1000 / 30);
 
     } catch (e) {
         console.error(e);
@@ -411,7 +418,10 @@ function stopCamera() {
     state.streaming = false;
     toggleBtn.textContent = "CAMERA START";
     
-    loopWorker.postMessage('stop'); // Stop the background loop
+    if (state.loopTimer) {
+        clearInterval(state.loopTimer);
+        state.loopTimer = null;
+    }
 
     const stream = video.srcObject;
     if (stream) {
@@ -595,30 +605,6 @@ function initMediaPipe() {
 // Optimization: Reuse temp canvas
 let tempCanvas = document.createElement('canvas');
 let tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
-
-// Web Workerを利用して裏画面でも処理を止めない（ブラウザのタイマー制限を回避）
-const workerCode = `
-    let timer = null;
-    self.onmessage = function(e) {
-        if (e.data === 'start') {
-            if(timer) clearInterval(timer);
-            timer = setInterval(() => {
-                self.postMessage('tick');
-            }, 1000 / 30); // 30 FPS
-        } else if (e.data === 'stop') {
-            clearInterval(timer);
-            timer = null;
-        }
-    };
-`;
-const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
-const loopWorker = new Worker(URL.createObjectURL(workerBlob));
-
-loopWorker.onmessage = () => {
-    if (state.streaming && !state.processingInProgress) {
-        processFrame();
-    }
-};
 
 async function processFrame() {
     if (!state.streaming || state.processingInProgress) {
