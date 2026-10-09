@@ -100,47 +100,76 @@ document.getElementById('silhouetteRange').addEventListener('input', (e) => {
 
 // Camera Selection Logic
 const cameraSelect = document.getElementById('cameraSelect');
+const CAMERA_LABEL_KEY = 'passpeople.cameraLabel';
+
+function loadSavedCameraLabel() {
+    try { return localStorage.getItem(CAMERA_LABEL_KEY) || ''; } catch (e) { return ''; }
+}
+function saveCameraLabel(label) {
+    try { localStorage.setItem(CAMERA_LABEL_KEY, label || ''); } catch (e) { }
+}
 
 async function getCameras() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    if (!cameraSelect || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return [];
     try {
         const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter(device => device.kind === 'videoinput');
-        
-        // Preserve current selection if any
+        // 権限未許可のブラウザでは deviceId が空のダミーが返るため除外する
+        const videoDevices = devices.filter(d => d.kind === 'videoinput' && d.deviceId);
+
+        // Preserve current selection if any (PCが変わってもラベル名で外部カメラを復元)
         const currentVal = cameraSelect.value;
+        const savedLabel = loadSavedCameraLabel();
         cameraSelect.innerHTML = '<option value="">デフォルト</option>';
-        
+
+        let matched = false;
         videoDevices.forEach((device, index) => {
             const option = document.createElement('option');
             option.value = device.deviceId;
             option.text = device.label || `カメラ ${index + 1}`;
-            if (device.deviceId === currentVal) option.selected = true;
+            if (!matched && device.deviceId === currentVal) {
+                option.selected = true;
+                matched = true;
+            }
             cameraSelect.appendChild(option);
         });
+        if (!matched && savedLabel) {
+            const opt = Array.from(cameraSelect.options).find(o => o.value && o.text === savedLabel);
+            if (opt) opt.selected = true;
+        }
+        return videoDevices;
     } catch (e) {
         console.error('カメラ一覧の取得に失敗しました', e);
+        return [];
     }
 }
 
-// Request permission to get labels, then list cameras
+// Request permission to get labels / deviceIds, then list cameras
 async function requestCameraPermissionAndList() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+    const list = await getCameras();
+    // 既に許可済みでラベルが取れているなら追加の起動は不要
+    if (list.length > 0 && list.every(d => d.label)) return;
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         stream.getTracks().forEach(track => track.stop());
-        await getCameras();
     } catch (e) {
         console.warn("Permission denied or error getting labels", e);
-        await getCameras(); // List anyway (without labels usually)
     }
+    await getCameras();
 }
 
 // Initialize camera list
 requestCameraPermissionAndList();
 
-// Restart camera if selection changes and streaming is active
 if (cameraSelect) {
+    // プルダウンを開くたびに最新の接続状況を反映（後から挿した外部カメラ対応）
+    cameraSelect.addEventListener('mousedown', () => { getCameras(); });
+    cameraSelect.addEventListener('focus', () => { getCameras(); });
+
+    // Restart camera if selection changes and streaming is active
     cameraSelect.addEventListener('change', () => {
+        const opt = cameraSelect.options[cameraSelect.selectedIndex];
+        saveCameraLabel(opt && opt.value ? opt.text : '');
         if (state.streaming) {
             stopCamera();
             startCamera();
@@ -149,7 +178,9 @@ if (cameraSelect) {
 }
 
 // Also update list when devices change (e.g. plug in a camera)
-navigator.mediaDevices.addEventListener('devicechange', getCameras);
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', getCameras);
+}
 
 const menuToggle = document.getElementById('menuToggle');
 const modeMenu = document.getElementById('modeMenu');
@@ -361,6 +392,19 @@ async function startCamera() {
             alert("カメラ接続エラー: " + fallbackError.name + "\n\n【よくある原因】\n1. 他のアプリ(Zoom, OBS, カメラメーカーの公式ソフト等)がカメラを使用中\n2. ブラウザでカメラのアクセスが許可されていない\n3. ケーブル接続やカメラ本体のモード設定(動画モード等)が正しくない");
             return;
         }
+    }
+
+    // 権限取得後に一覧を更新し、実際に使用中のカメラを選択状態にする
+    try {
+        await getCameras();
+        const track = stream.getVideoTracks()[0];
+        const activeId = track && track.getSettings ? track.getSettings().deviceId : null;
+        if (activeId && cameraSelect && !cameraSelect.value) {
+            const opt = Array.from(cameraSelect.options).find(o => o.value === activeId);
+            if (opt) opt.selected = true;
+        }
+    } catch (e) {
+        console.warn('カメラ一覧の更新に失敗しました', e);
     }
 
     try {
