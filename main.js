@@ -101,6 +101,7 @@ document.getElementById('silhouetteRange').addEventListener('input', (e) => {
 // Camera Selection Logic
 const cameraSelect = document.getElementById('cameraSelect');
 const CAMERA_LABEL_KEY = 'passpeople.cameraLabel';
+const NIKON_LABEL_RE = /nikon|ニコン/i;
 
 function loadSavedCameraLabel() {
     try { return localStorage.getItem(CAMERA_LABEL_KEY) || ''; } catch (e) { return ''; }
@@ -134,8 +135,15 @@ async function getCameras() {
         });
         if (!matched && savedLabel) {
             const opt = Array.from(cameraSelect.options).find(o => o.value && o.text === savedLabel);
-            if (opt) opt.selected = true;
+            if (opt) { opt.selected = true; matched = true; }
         }
+        // 未選択ならニコンのカメラ（UVC接続 / Nikon Webcam Utility）を優先して選択
+        const nikonOpt = Array.from(cameraSelect.options).find(o => o.value && NIKON_LABEL_RE.test(o.text));
+        if (!matched && !state.streaming && nikonOpt) nikonOpt.selected = true;
+
+        // ニコンが見つからない時だけ接続方法のヒントを表示
+        const hint = document.getElementById('cameraHint');
+        if (hint) hint.classList.toggle('hidden', !!nikonOpt);
         return videoDevices;
     } catch (e) {
         console.error('カメラ一覧の取得に失敗しました', e);
@@ -144,11 +152,11 @@ async function getCameras() {
 }
 
 // Request permission to get labels / deviceIds, then list cameras
-async function requestCameraPermissionAndList() {
+async function requestCameraPermissionAndList(force = false) {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
     const list = await getCameras();
     // 既に許可済みでラベルが取れているなら追加の起動は不要
-    if (list.length > 0 && list.every(d => d.label)) return;
+    if (!force && list.length > 0 && list.every(d => d.label)) return;
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         stream.getTracks().forEach(track => track.stop());
@@ -165,6 +173,18 @@ if (cameraSelect) {
     // プルダウンを開くたびに最新の接続状況を反映（後から挿した外部カメラ対応）
     cameraSelect.addEventListener('mousedown', () => { getCameras(); });
     cameraSelect.addEventListener('focus', () => { getCameras(); });
+
+    // 再検索ボタン：権限を取り直して一覧を更新
+    const rescanBtn = document.getElementById('cameraRescanBtn');
+    if (rescanBtn) {
+        rescanBtn.addEventListener('click', async () => {
+            if (state.streaming) {
+                await getCameras();
+            } else {
+                await requestCameraPermissionAndList(true);
+            }
+        });
+    }
 
     // Restart camera if selection changes and streaming is active
     cameraSelect.addEventListener('change', () => {

@@ -53,9 +53,22 @@
         <div class="controls">
             <div class="control-row">
                 <label>CAMERA (カメラ)</label>
-                <select id="cameraSelect">
-                    <option value="">デフォルト</option>
-                </select>
+                <div class="camera-select-wrap">
+                    <select id="cameraSelect">
+                        <option value="">デフォルト</option>
+                    </select>
+                    <button id="cameraRescanBtn" type="button" title="カメラを再検索">↻</button>
+                </div>
+                <details id="cameraHint" class="camera-hint hidden">
+                    <summary>ニコンのカメラが表示されない場合</summary>
+                    <ol>
+                        <li>カメラをUSBで接続し電源をON（Z f / Z6III / Z8 / Z9 等は本体メニューで「USB接続：UVC/UAC」を選択）</li>
+                        <li>それ以外の機種はPCに「Nikon Webcam Utility」をインストールし、カメラを動画モードにする</li>
+                        <li>Nikon NX Tether等、カメラを使う他のアプリを終了する</li>
+                        <li>Chrome / Edge でこのページを開き、カメラを「許可」</li>
+                        <li>↻ ボタンで再検索（それでも出ない場合はブラウザを再起動）</li>
+                    </ol>
+                </details>
             </div>
             <div class="control-row">
                 <label>DETAIL (感度)</label>

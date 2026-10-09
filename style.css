@@ -276,6 +276,42 @@ body.preview-active .controls {
     margin-bottom: 0;
 }
 
+.camera-select-wrap {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.camera-select-wrap select {
+    flex: 1;
+    min-width: 0;
+}
+
+#cameraRescanBtn {
+    width: auto;
+    padding: 0 0.7rem;
+    font-size: 1rem;
+}
+
+.camera-hint {
+    margin-top: 0.4rem;
+    font-size: 0.7rem;
+    line-height: 1.5;
+}
+
+.camera-hint.hidden {
+    display: none;
+}
+
+.camera-hint summary {
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.camera-hint ol {
+    margin: 0.3rem 0 0;
+    padding-left: 1.2rem;
+}
+
 .control-row.button-row {
     flex: 0 0 auto;
 }
