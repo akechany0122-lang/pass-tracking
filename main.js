@@ -33,30 +33,34 @@ const DEFAULTS = {
     threshold: 0.5,        // 人物とみなす確率の境目
     // ② マスク整形・ちらつき
     openSize: 2,           // ノイズ除去（オープニング）の大きさ
-    closeSize: 5,          // すき間埋め（クロージング）。大きすぎると形がなめらかになりすぎる
+    closeSize: 7,          // すき間埋め（クロージング）。大きすぎると形がなめらかになりすぎる
     smoothing: 0.5,        // 前フレームとのブレンド率（0 = ブレンドなし）
     shapeFps: 12,          // パスの形を更新する頻度（一枚ずつ描いたような見え方）
     // ③ 外側の輪郭
-    outerEpsPct: 1.0,      // 直線化の強さ（人物の高さに対する %）
+    outerEpsPct: 1.8,      // 直線化の強さ（人物の高さに対する %）
     minArea: 0.3,          // 描かない輪郭の大きさ（画面面積に対する %）
     showHoles: true,       // 内側の穴（中抜き）
     minHoleArea: 0.05,     // 穴の最小面積（%）
     // ④ 内側の線
     showParts: true,       // 部位の境目（髪・顔・手・持ち物の多角形）
     showEdges: true,       // 人物の内側のエッジ（服の境目・靴など）
-    innerMax: 28,          // 1人あたりの内側の線の上限
+    innerMax: 22,          // 1人あたりの内側の線の上限
     faceMax: 6,            // 顔の中の線の上限
-    innerEpsPct: 0.8,      // 内側の線の直線化（人物の高さに対する %）
-    edgeMinLenPct: 13,     // これより短いエッジは捨てる（人物の高さに対する %）
+    innerEpsPct: 1.4,      // 内側の線の直線化（人物の高さに対する %）
+    edgeMinLenPct: 16,     // これより短いエッジは捨てる（人物の高さに対する %）
     edgeLow: 60,           // Canny のしきい値
     edgeHigh: 160,
     edgeInsetPct: 2,       // 外側の輪郭からどれだけ内側でエッジを取るか（%）
     // ⑤ 見た目（参考画像20枚の実測：線の太さ＝画面の高さの約1.35%で一定、人物は高さの約83%）
     //   背景は白・線は黒で固定。1人＝1本の線。
     lineWidthPct: 1.8,     // 線の太さ（画面の高さに対する %）
-    minSegPct: 0.8,        // これより短い線分はまとめて、長い直線だけにする（画面の高さに対する %）
-    spikeAngle: 11.5,      // これより鈍い角でトンガリ（miter の針）が出る。11.5° = miterLimit 10（Illustrator 標準）
-    wedgeRate: 0.45,       // 内側の線のうち、くさび（細い三角＋先端のトンガリ）にする割合
+    minSegPct: 1.5,        // これより短い線分はまとめて、長い直線だけにする（画面の高さに対する %）
+    spikeAngle: 8,         // これより鈍い角でトンガリ（miter の針）が出る。8° ≒ miterLimit 14（11.5° = 10 が Illustrator 標準）
+    spikeRate: 0.7,        // 外側の輪郭の出っ張った角のうち、トンガリを生やす割合
+    spikeLen: 4,           // 生やすトンガリの長さ（線の太さの何倍か）
+    spikeCorner: 30,       // この角度以上曲がる角にだけ生やす（°）
+    mergeAngle: 9,         // これより小さい折れは1本の直線にまとめる（°）
+    wedgeRate: 0.8,        // 内側の線のうち、くさび（細い三角＋先端のトンガリ）にする割合
     mirror: true,
     zoom: 1.0,
     // ⑥ 参考画像の重ね表示
@@ -64,7 +68,7 @@ const DEFAULTS = {
     refIndex: 21,
     refOpacity: 0.35,
 };
-const PARAMS_KEY = 'substantially.params.v4';
+const PARAMS_KEY = 'substantially.params.v5';
 
 function loadParams() {
     const p = { ...DEFAULTS };
@@ -616,12 +620,47 @@ function wedgePick(p, rate) {
     return h - Math.floor(h) < rate;
 }
 
+// 外側の輪郭の出っ張った角から、針のようなトンガリを生やす。
+// 角の先へ伸ばした点まで行き、少し角度をつけて戻る → 細い三角が黒く潰れ、先端は miter で尖る
+function addOutlineSpikes(pts, ax) {
+    const n = pts.length;
+    if (params.spikeRate <= 0 || n < 3) return pts;
+    let area = 0;
+    for (let i = 0; i < n; i++) {
+        const p = pts[i], q = pts[(i + 1) % n];
+        area += p[0] * ax * q[1] - q[0] * ax * p[1];
+    }
+    const sgn = Math.sign(area) || 1;
+    const lw = params.lineWidthPct / 100;
+    const th = Math.max(params.spikeAngle * 1.6, params.spikeAngle + 4) * Math.PI / 180;
+    const minTurn = params.spikeCorner * Math.PI / 180;
+    const out = [];
+    for (let i = 0; i < n; i++) {
+        const A = pts[(i - 1 + n) % n], V = pts[i], B = pts[(i + 1) % n];
+        out.push(V);
+        const ix = (V[0] - A[0]) * ax, iy = V[1] - A[1], ox = (B[0] - V[0]) * ax, oy = B[1] - V[1];
+        const la = Math.hypot(ix, iy), lb = Math.hypot(ox, oy);
+        if (la < lw * 1.5 || lb < lw * 1.5) continue;
+        const turn = Math.atan2(ix * oy - iy * ox, ix * ox + iy * oy);
+        if (Math.sign(turn) !== sgn || Math.abs(turn) < minTurn) continue; // 出っ張った角だけ
+        if (!wedgePick(V, params.spikeRate)) continue;
+        let dx = ix / la - ox / lb, dy = iy / la - oy / lb;
+        const dl = Math.hypot(dx, dy) || 1;
+        dx /= dl; dy /= dl;
+        const h = Math.abs(Math.sin(V[0] * 91.7 + V[1] * 47.3) * 9301.7) % 1;
+        const L = lw * params.spikeLen * (0.6 + 0.8 * h);
+        const e = Math.min(lb * 0.45, Math.max(L * Math.tan(th), params.minSegPct / 100 * 1.3));
+        out.push([V[0] + dx * L / ax, V[1] + dy * L], [V[0] + (ox / lb) * e / ax, V[1] + (oy / lb) * e]);
+    }
+    return out;
+}
+
 // 1人分の輪郭・穴・内側の線を、1本の連続した線につなぐ。
 // いちばん長い外側の輪郭を土台にし、残りの要素を「いま描いている線のいちばん近い点」から枝分かれさせて差し込む。
 // 枝は、近い点 → 要素（閉じた形は一周、開いた線は往復）→ 近い点に戻る、の順に通るので、
 // つなぎ線は短く、人物の内側を通る。曲がり角が鋭いところでは miter のトンガリになる。
 function linkFigure(contours, lines, ax) {
-    const outers = contours.map(c => c.outer).sort((a, b) => b.length - a.length);
+    const outers = contours.map(c => addOutlineSpikes(c.outer, ax)).sort((a, b) => b.length - a.length);
     if (!outers.length) return null;
     const base = outers[0];
     const path = base.concat([base[0].slice()]);
@@ -695,7 +734,7 @@ function linkFigure(contours, lines, ax) {
         const a = straight[straight.length - 1], b = out[k], c = out[k + 1];
         const cross = ((b[0] - a[0]) * ax) * (c[1] - b[1]) - (b[1] - a[1]) * ((c[0] - b[0]) * ax);
         const dot = ((b[0] - a[0]) * ax) * ((c[0] - b[0]) * ax) + (b[1] - a[1]) * (c[1] - b[1]);
-        if (dot > 0 && Math.abs(Math.atan2(cross, dot)) < 4 * Math.PI / 180) continue; // 4°未満の折れは直線にまとめる
+        if (dot > 0 && Math.abs(Math.atan2(cross, dot)) < params.mergeAngle * Math.PI / 180) continue; // ゆるい折れは直線にまとめる
         straight.push(b);
     }
     straight.push(out[out.length - 1]);
@@ -1390,7 +1429,11 @@ function buildGUI() {
     fLook.add(params, 'lineWidthPct', 0.3, 6, 0.05).name('線の太さ（画面の高さの%）');
     fLook.add(params, 'minSegPct', 0, 4, 0.05).name('最短の線分（%）');
     fLook.add(params, 'spikeAngle', 2, 60, 0.5).name('トンガリが出る角度（°）');
+    fLook.add(params, 'spikeRate', 0, 1, 0.05).name('輪郭のトンガリの割合');
+    fLook.add(params, 'spikeLen', 0, 12, 0.5).name('トンガリの長さ（×太さ）');
+    fLook.add(params, 'spikeCorner', 0, 120, 1).name('トンガリを生やす角（°）');
     fLook.add(params, 'wedgeRate', 0, 1, 0.05).name('くさびの割合');
+    fLook.add(params, 'mergeAngle', 0, 30, 0.5).name('直線にまとめる折れ（°）');
     fLook.add(params, 'mirror').name('左右反転');
     fLook.add(params, 'zoom', 0.5, 2, 0.01).name('拡大');
 
