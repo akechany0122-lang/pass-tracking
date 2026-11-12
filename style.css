@@ -66,7 +66,8 @@ canvas {
     position: absolute;
     top: 50%;
     left: 50%;
-    transform: translate(-50%, -50%) scaleX(-1);
+    /* 左右反転は描画側（調整パネルの「左右反転」）で行う */
+    transform: translate(-50%, -50%);
 }
 
 body.portrait-active {
@@ -314,9 +315,86 @@ body.preview-active .controls {
 
 .control-row.button-row {
     flex: 0 0 auto;
+    display: flex;
+    gap: 0.5rem;
 }
 
-label {
+.control-row.button-row button {
+    width: auto;
+    white-space: nowrap;
+}
+
+.ui-layer #freezeBtn.active {
+    background: #fff;
+    color: #000;
+    outline: 2px solid #000;
+    outline-offset: -2px;
+}
+
+.key-hint {
+    flex-basis: 100%;
+    font-size: 0.7rem;
+    letter-spacing: 0.03em;
+    opacity: 0.7;
+}
+
+.status-badge {
+    position: absolute;
+    top: 1.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+    font-weight: bold;
+    z-index: 100;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.status-badge.hidden {
+    display: none;
+}
+
+/* 調整パネル（lil-gui） */
+.lil-gui {
+    --font-family: 'Space Mono', monospace;
+    --background-color: rgba(255, 255, 255, 0.95);
+    --text-color: #000;
+    --title-background-color: #000;
+    --title-text-color: #fff;
+    --widget-color: #e6e6e6;
+    --hover-color: #d4d4d4;
+    --focus-color: #c8c8c8;
+    --number-color: #000;
+    --string-color: #000;
+    --name-width: 48%;
+}
+
+.lil-gui.autoPlace {
+    top: 5rem;
+    right: 1.5rem;
+    max-height: calc(100% - 19rem);
+    border: 2px solid #000;
+    box-shadow: 6px 6px 0 #000;
+    z-index: 50;
+    width: 300px;
+}
+
+/* H キー / プレビューモードで UI を全部隠す（展示用） */
+body.ui-hidden .menu-bar,
+body.ui-hidden .controls,
+body.ui-hidden .lil-gui.autoPlace,
+body.preview-active .lil-gui.autoPlace {
+    display: none !important;
+}
+
+body.ui-hidden {
+    cursor: none;
+}
+
+.controls label {
     display: block;
     font-size: 0.8rem;
     font-weight: 700;
@@ -324,13 +402,13 @@ label {
     letter-spacing: 0.05em;
 }
 
-input[type="range"] {
+.controls input[type="range"] {
     width: 100%;
     -webkit-appearance: none;
     background: transparent;
 }
 
-input[type="range"]::-webkit-slider-thumb {
+.controls input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     height: 16px;
     width: 16px;
@@ -341,13 +419,13 @@ input[type="range"]::-webkit-slider-thumb {
     /* Square thumb */
 }
 
-input[type="range"]::-webkit-slider-runnable-track {
+.controls input[type="range"]::-webkit-slider-runnable-track {
     width: 100%;
     height: 4px;
     background: #000;
 }
 
-button {
+:where(.ui-layer) button {
     width: 100%;
     padding: 1rem;
     background: #000;
@@ -360,7 +438,7 @@ button {
     text-transform: uppercase;
 }
 
-button:hover {
+:where(.ui-layer) button:hover {
     background: #333;
 }
 
