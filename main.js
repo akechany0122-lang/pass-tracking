@@ -18,6 +18,7 @@ const MODEL_URLS = {
     pose_lite: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task',
     pose_full: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task',
     pose_heavy: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task',
+    face: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task',
 };
 
 // ----------------------------------------------------------------------------
@@ -45,6 +46,8 @@ const DEFAULTS = {
     showParts: true,       // 部位の境目（髪・顔・手・持ち物の多角形）
     showEdges: true,       // 人物の内側のエッジ（服の境目・靴など）
     innerMax: 22,          // 1人あたりの内側の線の上限
+    faceFeatures: true,    // 目・眉・鼻・口（Face Landmarker）
+    faceEpsPct: 0.25,      // 顔のパーツの直線化（画面の高さに対する %）
     faceMax: 6,            // 顔の中の線の上限
     innerEpsPct: 1.4,      // 内側の線の直線化（人物の高さに対する %）
     edgeMinLenPct: 16,     // これより短いエッジは捨てる（人物の高さに対する %）
@@ -56,11 +59,7 @@ const DEFAULTS = {
     lineWidthPct: 1.8,     // 線の太さ（画面の高さに対する %）
     minSegPct: 1.5,        // これより短い線分はまとめて、長い直線だけにする（画面の高さに対する %）
     spikeAngle: 8,         // これより鈍い角でトンガリ（miter の針）が出る。8° ≒ miterLimit 14（11.5° = 10 が Illustrator 標準）
-    spikeRate: 0.7,        // 外側の輪郭の出っ張った角のうち、トンガリを生やす割合
-    spikeLen: 4,           // 生やすトンガリの長さ（線の太さの何倍か）
-    spikeCorner: 30,       // この角度以上曲がる角にだけ生やす（°）
     mergeAngle: 9,         // これより小さい折れは1本の直線にまとめる（°）
-    wedgeRate: 0.8,        // 内側の線のうち、くさび（細い三角＋先端のトンガリ）にする割合
     mirror: true,
     zoom: 1.0,
     // ⑥ 参考画像の重ね表示
@@ -68,7 +67,7 @@ const DEFAULTS = {
     refIndex: 21,
     refOpacity: 0.35,
 };
-const PARAMS_KEY = 'substantially.params.v5';
+const PARAMS_KEY = 'substantially.params.v6';
 
 function loadParams() {
     const p = { ...DEFAULTS };
@@ -184,6 +183,7 @@ let fileset = null;
 let segmenter = null;       // selfie_multiclass（人物＋髪・服・アクセサリー）
 let poseLandmarker = null;  // 人ごとのマスク
 let poseModelLoaded = null;
+let faceLandmarker = null;  // 目・眉・鼻・口
 let modelLoading = null;
 
 function needsSegmenter() { return params.segMode !== 'person'; }
@@ -192,6 +192,7 @@ function modelsReady() {
     if (modelLoading) return false;
     if (needsSegmenter() && !segmenter) return false;
     if (needsPose() && (!poseLandmarker || poseModelLoaded !== params.poseModel)) return false;
+    if (params.faceFeatures && !faceLandmarker) return false;
     return true;
 }
 
@@ -243,6 +244,18 @@ async function ensureModels() {
                 // GPU だと人物マスクが全て 0 で返ってくる（tasks-vision 0.10.14 で確認）ため CPU で動かす
                 false);
             poseModelLoaded = model;
+        }
+        if (params.faceFeatures && !faceLandmarker) {
+            faceLandmarker = await createWithFallback(
+                (o) => tv.FaceLandmarker.createFromOptions(fileset, o),
+                {
+                    baseOptions: { modelAssetPath: MODEL_URLS.face },
+                    runningMode: 'IMAGE',  // 頭の部分を切り出した画像ごとに使う
+                    numFaces: 1,
+                    minFaceDetectionConfidence: 0.4,
+                    minFacePresenceConfidence: 0.4,
+                    minTrackingConfidence: 0.4,
+                });
         }
     })();
     updateBadge();
@@ -614,53 +627,40 @@ function selectInner(items) {
     return out;
 }
 
-// 線ごとに決まった値（座標から作る）で、くさびにするかを決める。毎フレーム同じ線は同じ結果になりやすい
-function wedgePick(p, rate) {
-    const h = Math.sin(Math.round(p[0] * 60) * 12.9898 + Math.round(p[1] * 60) * 78.233) * 43758.5453;
-    return h - Math.floor(h) < rate;
-}
-
-// 外側の輪郭の出っ張った角から、針のようなトンガリを生やす。
-// 角の先へ伸ばした点まで行き、少し角度をつけて戻る → 細い三角が黒く潰れ、先端は miter で尖る
-function addOutlineSpikes(pts, ax) {
-    const n = pts.length;
-    if (params.spikeRate <= 0 || n < 3) return pts;
-    let area = 0;
-    for (let i = 0; i < n; i++) {
-        const p = pts[i], q = pts[(i + 1) % n];
-        area += p[0] * ax * q[1] - q[0] * ax * p[1];
+// 抽象化：短すぎる線分をまとめ、ゆるい折れを消して、長い直線だけの形にする（要素ごとに行う）。
+// トンガリは足さない。形が鋭角に折れたところだけが、miter で自然に尖る。
+function abstractPts(pts, closed, ax) {
+    const minSeg = params.minSegPct / 100;
+    const len = (p, q) => Math.hypot((p[0] - q[0]) * ax, p[1] - q[1]);
+    let out = [pts[0]];
+    for (let k = 1; k < pts.length; k++) {
+        if (len(pts[k], out[out.length - 1]) >= minSeg || (!closed && k === pts.length - 1)) out.push(pts[k]);
     }
-    const sgn = Math.sign(area) || 1;
-    const lw = params.lineWidthPct / 100;
-    const th = Math.max(params.spikeAngle * 1.6, params.spikeAngle + 4) * Math.PI / 180;
-    const minTurn = params.spikeCorner * Math.PI / 180;
-    const out = [];
-    for (let i = 0; i < n; i++) {
-        const A = pts[(i - 1 + n) % n], V = pts[i], B = pts[(i + 1) % n];
-        out.push(V);
-        const ix = (V[0] - A[0]) * ax, iy = V[1] - A[1], ox = (B[0] - V[0]) * ax, oy = B[1] - V[1];
-        const la = Math.hypot(ix, iy), lb = Math.hypot(ox, oy);
-        if (la < lw * 1.5 || lb < lw * 1.5) continue;
-        const turn = Math.atan2(ix * oy - iy * ox, ix * ox + iy * oy);
-        if (Math.sign(turn) !== sgn || Math.abs(turn) < minTurn) continue; // 出っ張った角だけ
-        if (!wedgePick(V, params.spikeRate)) continue;
-        let dx = ix / la - ox / lb, dy = iy / la - oy / lb;
-        const dl = Math.hypot(dx, dy) || 1;
-        dx /= dl; dy /= dl;
-        const h = Math.abs(Math.sin(V[0] * 91.7 + V[1] * 47.3) * 9301.7) % 1;
-        const L = lw * params.spikeLen * (0.6 + 0.8 * h);
-        const e = Math.min(lb * 0.45, Math.max(L * Math.tan(th), params.minSegPct / 100 * 1.3));
-        out.push([V[0] + dx * L / ax, V[1] + dy * L], [V[0] + (ox / lb) * e / ax, V[1] + (oy / lb) * e]);
+    if (closed && out.length > 2 && len(out[out.length - 1], out[0]) < minSeg) out.pop();
+    const lim = params.mergeAngle * Math.PI / 180;
+    let changed = true;
+    while (changed && out.length > (closed ? 3 : 2)) {
+        changed = false;
+        const n = out.length;
+        const keep = [];
+        for (let k = 0; k < n; k++) {
+            if (!closed && (k === 0 || k === n - 1)) { keep.push(out[k]); continue; }
+            const A = out[(k - 1 + n) % n], B = out[k], C = out[(k + 1) % n];
+            const ux = (B[0] - A[0]) * ax, uy = B[1] - A[1], vx = (C[0] - B[0]) * ax, vy = C[1] - B[1];
+            const turn = Math.abs(Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy));
+            if (turn < lim && !changed) { changed = true; continue; } // 1回に1点ずつ消す
+            keep.push(B);
+        }
+        out = keep;
     }
     return out;
 }
 
-// 1人分の輪郭・穴・内側の線を、1本の連続した線につなぐ。
+// 1人分の輪郭・穴・内側の線・顔のパーツを、1本の連続した線につなぐ。
 // いちばん長い外側の輪郭を土台にし、残りの要素を「いま描いている線のいちばん近い点」から枝分かれさせて差し込む。
-// 枝は、近い点 → 要素（閉じた形は一周、開いた線は往復）→ 近い点に戻る、の順に通るので、
-// つなぎ線は短く、人物の内側を通る。曲がり角が鋭いところでは miter のトンガリになる。
+// 枝は、近い点 → 要素（閉じた形は一周、開いた線は往復）→ 近い点に戻る、の順に通る。
 function linkFigure(contours, lines, ax) {
-    const outers = contours.map(c => addOutlineSpikes(c.outer, ax)).sort((a, b) => b.length - a.length);
+    const outers = contours.map(c => c.outer).sort((a, b) => b.length - a.length);
     if (!outers.length) return null;
     const base = outers[0];
     const path = base.concat([base[0].slice()]);
@@ -694,55 +694,88 @@ function linkFigure(contours, lines, ax) {
             for (let k = 0; k <= n; k++) seq.push(el.pts[(el.vi + k) % n].slice());
         } else {
             const fwd = el.vi === 0 ? el.pts : el.pts.slice().reverse();
-            seq = fwd.map(q => q.slice());
-            const tip = fwd[fwd.length - 1], st = fwd[0];
-            const len = Math.hypot((tip[0] - st[0]) * ax, tip[1] - st[1]);
-            if (len > 0 && wedgePick(st, params.wedgeRate)) {
-                // くさび：先端で少し角度をつけて折り返す → 細い三角が黒く潰れ、先端にトンガリが出る。
-                // 三角の幅は線の太さ程度に抑え、先端の近くだけに作る（大きな三角が体の外に出ないように）
-                const ang = Math.max(params.spikeAngle * 1.6, params.spikeAngle + 4) * Math.PI / 180;
-                const w = params.lineWidthPct / 100 * 1.2;          // 幅（画面の高さ基準）
-                const k = Math.min(len * 0.8, w / Math.tan(ang));  // 先端から戻る距離
-                const prev = fwd[fwd.length - 2];
-                const pl = Math.hypot((tip[0] - prev[0]) * ax, tip[1] - prev[1]) || 1;
-                const ux = (tip[0] - prev[0]) * ax / pl, uy = (tip[1] - prev[1]) / pl;
-                const side = wedgePick(tip, 0.5) ? 1 : -1;
-                const wk = k * Math.tan(ang);
-                seq.push([tip[0] + (-ux * k - side * uy * wk) / ax, tip[1] - uy * k + side * ux * wk]);
-                // 残りは元の線をなぞって根元へ
-                const back = fwd.slice(0, -1).reverse().filter(q => Math.hypot((q[0] - tip[0]) * ax, q[1] - tip[1]) > k);
-                seq.push(...back.map(q => q.slice()));
-                if (!back.length || back[back.length - 1] !== st) seq.push(st.slice());
-            } else {
-                seq.push(...fwd.slice(0, -1).reverse().map(q => q.slice())); // 往復（同じ線をなぞって戻る）
-            }
+            seq = fwd.concat(fwd.slice(0, -1).reverse()).map(q => q.slice()); // 往復（同じ線をなぞって戻る）
         }
         seq.push(el.at.slice());
         path.splice(i + 1, 0, ...seq);
         for (const other of elems) check(other, seq);
     }
-    // 短すぎる線分をまとめ、ほぼ一直線に並ぶ点も消す → 長い直線だけで描く
-    // （長さ 0 の線分も消える。角の向きが不安定になるのを防ぐ）
-    const minSeg = params.minSegPct / 100;
-    const len = (p, q) => Math.hypot((p[0] - q[0]) * ax, p[1] - q[1]);
-    let out = [path[0]];
+    // 同じ位置が続く点を除く（長さ 0 の線分は角の向きが不安定になる）
+    const out = [path[0]];
     for (let k = 1; k < path.length; k++) {
-        if (len(path[k], out[out.length - 1]) >= minSeg || k === path.length - 1) out.push(path[k]);
+        const q = out[out.length - 1];
+        if (Math.abs(path[k][0] - q[0]) > 1e-6 || Math.abs(path[k][1] - q[1]) > 1e-6) out.push(path[k]);
     }
-    const straight = [out[0]];
-    for (let k = 1; k < out.length - 1; k++) {
-        const a = straight[straight.length - 1], b = out[k], c = out[k + 1];
-        const cross = ((b[0] - a[0]) * ax) * (c[1] - b[1]) - (b[1] - a[1]) * ((c[0] - b[0]) * ax);
-        const dot = ((b[0] - a[0]) * ax) * ((c[0] - b[0]) * ax) + (b[1] - a[1]) * (c[1] - b[1]);
-        if (dot > 0 && Math.abs(Math.atan2(cross, dot)) < params.mergeAngle * Math.PI / 180) continue; // ゆるい折れは直線にまとめる
-        straight.push(b);
+    return out;
+}
+
+// ----------------------------------------------------------------------------
+// 顔のパーツ（目・眉・鼻・口）— MediaPipe Face Landmarker の点から直線の記号をつくる
+// ----------------------------------------------------------------------------
+
+const FACE_PARTS = [
+    { name: 'eyeL', closed: true, idx: [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466] },
+    { name: 'eyeR', closed: true, idx: [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246] },
+    { name: 'browL', closed: false, idx: [336, 296, 334, 293, 300] },
+    { name: 'browR', closed: false, idx: [107, 66, 105, 63, 70] },
+    { name: 'nose', closed: false, idx: [168, 6, 197, 195, 5, 4, 98] },
+    { name: 'mouth', closed: true, idx: [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185] },
+];
+
+// 顔を探す。離れて立つと顔は小さいので、Pose で分かった頭のまわりを切り出し、拡大してから探す。
+// Pose がないとき（全体モード）は映像全体から探す。
+const faceCanvas = document.createElement('canvas');
+faceCanvas.width = faceCanvas.height = 256;
+const faceCtx = faceCanvas.getContext('2d');
+function detectFaces(vw, vh, poseLms) {
+    const ax = vw / vh;
+    const out = [];
+    if (!poseLms.length) {
+        const res = faceLandmarker.detect(video);
+        for (const lm of (res.faceLandmarks || [])) out.push(faceFeatures(lm, ax));
+        return out;
     }
-    straight.push(out[out.length - 1]);
-    return straight;
+    for (const lm of poseLms) {
+        const nose = lm[0];
+        if (!nose || (nose.v !== undefined && nose.v < 0.5)) continue; // 後ろ向きなど
+        const px = (p) => [p.x * vw, p.y * vh];
+        const dist = (a, b) => Math.hypot(px(a)[0] - px(b)[0], px(a)[1] - px(b)[1]);
+        const side = Math.max(dist(lm[7], lm[8]) * 2.6, dist(lm[11], lm[12]) * 1.1, 48);
+        const [cx, cy] = px(nose);
+        const x0 = cx - side / 2, y0 = cy - side / 2;
+        faceCtx.fillStyle = '#808080';
+        faceCtx.fillRect(0, 0, 256, 256);
+        faceCtx.drawImage(video, x0, y0, side, side, 0, 0, 256, 256);
+        const res = faceLandmarker.detect(faceCanvas);
+        const f = res.faceLandmarks && res.faceLandmarks[0];
+        if (!f) continue;
+        // 切り出した座標 → 映像全体の座標（0〜1）
+        const mapped = f.map(p => ({ x: (x0 + p.x * side) / vw, y: (y0 + p.y * side) / vh }));
+        out.push(faceFeatures(mapped, ax));
+    }
+    return out;
+}
+
+// 1つの顔 → { center: [x,y], feats: [{ pts, closed }] }（座標は 0〜1）
+function faceFeatures(lm, ax) {
+    const eps = params.faceEpsPct / 100;
+    const feats = [];
+    for (const part of FACE_PARTS) {
+        const raw = part.idx.map(i => [lm[i].x * ax, lm[i].y]);
+        let pts;
+        if (part.closed) {
+            pts = simplifyOpen(raw.concat([raw[0]]), eps).slice(0, -1);
+            if (pts.length < 3) pts = [raw[0], raw[Math.floor(raw.length / 2)]]; // つぶれたら線に
+        } else {
+            pts = simplifyOpen(raw, eps);
+        }
+        feats.push({ pts: pts.map(([x, y]) => [x / ax, y]), closed: part.closed && pts.length >= 3 });
+    }
+    return { center: [lm[1].x, lm[1].y], feats };
 }
 
 // 1人分のマスク → { h: 人物の高さ(0〜1), path: 1本の線, parts: 要素の数 }
-function trackToFigure(mask, w, h) {
+function trackToFigure(mask, w, h, faces) {
     // ② 二値化 → オープニング（ノイズを消す）→ クロージング（隙間を埋める）
     const thr = params.threshold;
     const bin = binMat.data;
@@ -801,11 +834,30 @@ function trackToFigure(mask, w, h) {
 
     // 内側の線（部位の境目＋人物の内側のエッジ）。外側の輪郭から少し内側の範囲だけを使う
     cv.erode(binMat, insetMat, getKernel(oddSize(Math.max(3, hPx * params.edgeInsetPct / 100))));
-    const inner = [];
+    let inner = [];
     if (params.showParts) inner.push(...classParts(w, h, hPx));
     if (params.showEdges) inner.push(...edgeLines(w, h, hPx));
-    fig.lines = selectInner(inner).map(({ pts, closed }) => ({ pts, closed }));
-    const path = linkFigure(fig.contours, fig.lines, state.vw && state.vh ? state.vw / state.vh : 16 / 9);
+
+    // この人の顔（鼻先がマスクの中にある顔）
+    const myFaces = [];
+    for (let k = faces.length - 1; k >= 0; k--) {
+        const [cx, cy] = faces[k].center;
+        const fx = Math.round(cx * w), fy = Math.round(cy * h);
+        if (fx >= 0 && fy >= 0 && fx < w && fy < h && bin[fy * w + fx]) myFaces.push(...faces.splice(k, 1));
+    }
+    // 顔のパーツが取れたら、顔の中のエッジや穴は使わない（二重にならないように）
+    if (myFaces.length) inner = inner.filter(it => !it.face);
+
+    const ax = state.vw && state.vh ? state.vw / state.vh : 16 / 9;
+    for (const c of fig.contours) {
+        c.outer = abstractPts(c.outer, true, ax);
+        c.holes = c.holes.map(hl => abstractPts(hl, true, ax)).filter(hl => hl.length >= 3);
+    }
+    fig.lines = selectInner(inner)
+        .map(({ pts, closed }) => ({ pts: abstractPts(pts, closed, ax), closed }))
+        .filter(l => l.pts.length >= 2);
+    for (const fc of myFaces) fig.lines.push(...fc.feats); // 目・眉・鼻・口（細かいので抽象化しすぎない）
+    const path = linkFigure(fig.contours.filter(c => c.outer.length >= 3), fig.lines, ax);
     if (!path) return null;
     return { h: fig.h, path, parts: fig.contours.reduce((m, c) => m + 1 + c.holes.length, 0) + fig.lines.length };
 }
@@ -870,8 +922,10 @@ function processFrame() {
     } else {
         classMap = null;
     }
+    const poseLms = [];
     if (needsPose()) {
         poseLandmarker.detectForVideo(procCanvas, ts, (res) => {
+            for (const lm of (res.landmarks || [])) poseLms.push(lm.map(p => ({ x: p.x, y: p.y, v: p.visibility })));
             const masks = res.segmentationMasks || [];
             masks.forEach((m, i) => {
                 people.push({
@@ -880,6 +934,16 @@ function processFrame() {
                 });
             });
         });
+    }
+
+    // 顔のパーツ（目・眉・鼻・口）。小さいので元の解像度の映像で取る
+    const faces = [];
+    if (params.faceFeatures && faceLandmarker) {
+        try {
+            faces.push(...detectFaces(vw, vh, poseLms));
+        } catch (e) {
+            console.warn('顔のパーツを取得できませんでした', e); // 顔が取れなくても全身の線は描く
+        }
     }
 
     // 内側の線用のエッジ（映像全体で1回。人ごとにマスクの内側だけ使う）
@@ -901,8 +965,9 @@ function processFrame() {
     // ② 時間方向の平滑化 → ③〜⑤ 輪郭化
     updateTracks(frameMasks);
     const next = [];
+    const pool = faces.slice();
     for (const t of tracks) {
-        const f = trackToFigure(t.mask, w, h);
+        const f = trackToFigure(t.mask, w, h, pool);
         if (f) next.push(f);
     }
     figures = next;
@@ -1418,7 +1483,9 @@ function buildGUI() {
     fInner.add(params, 'showParts').name('部位の境目（髪・顔・手・持ち物）');
     fInner.add(params, 'showEdges').name('内側のエッジ（服の境目など）');
     fInner.add(params, 'innerMax', 0, 150, 1).name('線の本数（上限）');
-    fInner.add(params, 'faceMax', 0, 20, 1).name('顔の線（上限）');
+    fInner.add(params, 'faceFeatures').name('目・眉・鼻・口').onChange(onModelChange);
+    fInner.add(params, 'faceEpsPct', 0, 1, 0.01).name('顔のパーツの直線化（%）');
+    fInner.add(params, 'faceMax', 0, 20, 1).name('顔の線（パーツが取れないとき）');
     fInner.add(params, 'innerEpsPct', 0.1, 2, 0.05).name('直線化（身長の%）');
     fInner.add(params, 'edgeMinLenPct', 0.5, 20, 0.5).name('最短の線（身長の%）');
     fInner.add(params, 'edgeLow', 5, 200, 1).name('エッジ感度（下）');
@@ -1429,10 +1496,6 @@ function buildGUI() {
     fLook.add(params, 'lineWidthPct', 0.3, 6, 0.05).name('線の太さ（画面の高さの%）');
     fLook.add(params, 'minSegPct', 0, 4, 0.05).name('最短の線分（%）');
     fLook.add(params, 'spikeAngle', 2, 60, 0.5).name('トンガリが出る角度（°）');
-    fLook.add(params, 'spikeRate', 0, 1, 0.05).name('輪郭のトンガリの割合');
-    fLook.add(params, 'spikeLen', 0, 12, 0.5).name('トンガリの長さ（×太さ）');
-    fLook.add(params, 'spikeCorner', 0, 120, 1).name('トンガリを生やす角（°）');
-    fLook.add(params, 'wedgeRate', 0, 1, 0.05).name('くさびの割合');
     fLook.add(params, 'mergeAngle', 0, 30, 0.5).name('直線にまとめる折れ（°）');
     fLook.add(params, 'mirror').name('左右反転');
     fLook.add(params, 'zoom', 0.5, 2, 0.01).name('拡大');
