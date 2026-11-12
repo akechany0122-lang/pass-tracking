@@ -1,7 +1,10 @@
+/* SUBSTANTIALLY — 白い紙に黒い線。角は尖らせ、飾りは足さない */
 :root {
-    --bg-color: #ffffff;
-    --text-color: #000000;
-    --accent: #000000;
+    --ink: #000;
+    --paper: #fff;
+    --rule: 3px;
+    --display: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
 }
 
 * {
@@ -10,281 +13,164 @@
     padding: 0;
 }
 
+html,
 body {
-    background-color: #ffffff;
-    background: #ffffff;
-    color: var(--text-color);
-    font-family: 'Space Mono', monospace;
-    overflow: hidden;
-    width: 100vw;
-    height: 100vh;
-}
-
-#loader {
-    position: fixed;
-    top: 0;
-    left: 0;
     width: 100%;
     height: 100%;
-    background: var(--bg-color);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    z-index: 999;
-    transition: opacity 0.5s;
-}
-
-#loader.hidden {
-    opacity: 0;
-    pointer-events: none;
-}
-
-.loader-text {
-    font-size: 1.5rem;
-    letter-spacing: 0.1em;
-    animation: blink 1s infinite;
-}
-
-@keyframes blink {
-
-    0%,
-    100% {
-        opacity: 1;
-    }
-
-    50% {
-        opacity: 0.3;
-    }
+    overflow: hidden;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--mono);
+    -webkit-font-smoothing: antialiased;
 }
 
 canvas {
-    display: block;
-    width: 100%;
-    height: 100%;
-    background-color: #ffffff;
-    /* Added to center when not 100% */
     position: absolute;
     top: 50%;
     left: 50%;
+    display: block;
+    background: var(--paper);
     /* 左右反転は描画側（調整パネルの「左右反転」）で行う */
     transform: translate(-50%, -50%);
 }
 
-body.portrait-active {
-    background-color: #000000;
-}
-body.portrait-active canvas {
-    width: auto;
-    height: auto;
-    max-width: 100%;
-    max-height: 100%;
-}
-
 #webcam {
     position: absolute;
-    top: 0;
-    left: 0;
     width: 1px;
     height: 1px;
     opacity: 0;
     pointer-events: none;
 }
 
-.ui-layer {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-    padding: 2rem;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
+button,
+select {
+    font: inherit;
+    color: inherit;
+    border-radius: 0;
 }
 
-.menu-bar {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    width: 100%;
-    pointer-events: none;
-    padding: 1rem 1.5rem;
-    /* Reduced padding to move to corners */
-}
+/* ---------------------------------------------------------------- はじめの画面 */
 
-.icon-button {
-    pointer-events: auto;
-    background: #000;
-    color: #fff;
-    border: none;
-    width: 32px;
-    /* Shrunk from 48px */
-    height: 32px;
-    /* Shrunk from 48px */
-    border-radius: 50%;
-    cursor: pointer;
+#intro {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s ease;
-    flex-shrink: 0;
+    padding: 16px;
+    background: var(--paper);
+    transition: opacity 0.4s ease;
 }
 
-.icon-button svg {
-    width: 18px;
-    /* Shrunk icon */
-    height: 18px;
+body.running #intro {
+    opacity: 0;
+    pointer-events: none;
 }
 
-.icon-button:hover {
-    transform: scale(1.1);
-}
-
-.icon-button:active {
-    transform: scale(0.9);
-}
-
-.mode-menu {
-    position: absolute;
-    top: 4rem; /* Below the menu button */
-    right: 1.5rem;
-    background: rgba(255, 255, 255, 0.95);
-    backdrop-filter: blur(10px);
-    border: 2px solid #000;
-    box-shadow: 4px 4px 0px #000;
+.intro-inner {
+    width: min(720px, 100%);
     display: flex;
     flex-direction: column;
-    pointer-events: auto;
-    z-index: 100;
-    opacity: 1;
-    transition: opacity 0.3s, transform 0.3s;
-    transform-origin: top right;
+    align-items: flex-start;
 }
 
-.mode-menu.hidden {
-    opacity: 0;
-    transform: scale(0.9);
-    pointer-events: none;
+.mark {
+    width: 140px;
+    height: auto;
+    margin-bottom: 28px;
+    overflow: visible;
 }
 
-.mode-menu button {
-    background: transparent;
-    color: #000;
-    border: none;
-    border-bottom: 1px solid #ddd;
-    padding: 1rem 1.5rem;
+h1 {
+    font-family: var(--display);
+    font-weight: 800;
+    font-stretch: 125%;
+    font-size: clamp(34px, 7.4vw, 76px);
+    line-height: 0.95;
+    letter-spacing: -0.01em;
+}
+
+.sub {
+    margin-top: 14px;
+    font-size: 13px;
+    letter-spacing: 0.3em;
+}
+
+.start {
+    margin-top: 56px;
+    min-width: 220px;
+    padding: 18px 28px;
+    border: var(--rule) solid var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+    font-weight: 500;
+    font-size: 15px;
+    letter-spacing: 0.4em;
     text-align: left;
-    font-weight: bold;
-    text-transform: none;
     cursor: pointer;
-    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
 }
 
-.mode-menu button:last-child {
-    border-bottom: none;
+.start:hover:not(:disabled) {
+    background: var(--paper);
+    color: var(--ink);
 }
 
-.mode-menu button:hover {
-    background: rgba(0, 0, 0, 0.05);
+.start:disabled {
+    background: var(--paper);
+    color: var(--ink);
+    cursor: progress;
+    animation: blink 1.2s steps(2) infinite;
 }
 
-.mode-menu button.active {
-    background: #000;
-    color: #fff;
+@keyframes blink {
+    50% {
+        opacity: 0.35;
+    }
 }
 
-.recording-indicator {
-    position: absolute;
-    top: 1.5rem;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0, 0, 0, 0.7);
-    color: #fff;
-    padding: 0.5rem 1rem;
-    border-radius: 20px;
+.camera {
+    margin-top: 28px;
+    width: min(440px, 100%);
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-size: 0.9rem;
-    font-weight: bold;
-    z-index: 100;
-    pointer-events: none;
+    gap: 12px;
+    border-bottom: 1.5px solid var(--ink);
+    padding-bottom: 6px;
 }
 
-.recording-indicator.hidden {
-    display: none;
+.label,
+.keys,
+.brand {
+    font-size: 11px;
+    letter-spacing: 0.25em;
 }
 
-.red-dot {
-    width: 12px;
-    height: 12px;
-    background: #ff3b30;
-    border-radius: 50%;
-    animation: pulse 1.5s infinite;
-}
-
-@keyframes pulse {
-    0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.7); }
-    70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(255, 59, 48, 0); }
-    100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 59, 48, 0); }
-}
-
-body.preview-active .menu-bar,
-body.preview-active .controls {
-    display: none !important;
-}
-
-.controls {
-    pointer-events: auto;
-    width: 100%;
-    max-width: 1000px;
-    margin: 0 auto;
-    background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(10px);
-    border: 2px solid #000;
-    padding: 1.5rem;
-    box-shadow: 10px 10px 0px #000;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1.5rem;
-    align-items: flex-end;
-    transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
-    transform-origin: bottom;
-}
-
-.controls.hidden {
-    transform: translateY(120%);
-    opacity: 0;
-    pointer-events: none;
-}
-
-.control-row {
-    flex: 1;
-    min-width: 150px;
-    margin-bottom: 0;
-}
-
-.camera-select-wrap {
-    display: flex;
-    gap: 0.4rem;
-}
-
-.camera-select-wrap select {
+.camera select {
     flex: 1;
     min-width: 0;
+    padding: 4px 0;
+    border: none;
+    background: transparent;
+    font-size: 13px;
+    cursor: pointer;
+    outline: none;
 }
 
-#cameraRescanBtn {
-    width: auto;
-    padding: 0 0.7rem;
-    font-size: 1rem;
+.rescan {
+    border: none;
+    background: transparent;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
 }
 
 .camera-hint {
-    margin-top: 0.4rem;
-    font-size: 0.7rem;
-    line-height: 1.5;
+    margin-top: 12px;
+    max-width: 440px;
+    font-size: 11px;
+    line-height: 1.7;
 }
 
 .camera-hint.hidden {
@@ -293,153 +179,179 @@ body.preview-active .controls {
 
 .camera-hint summary {
     cursor: pointer;
-    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 3px;
 }
 
 .camera-hint ol {
-    margin: 0.3rem 0 0;
-    padding-left: 1.2rem;
+    margin-top: 6px;
+    padding-left: 1.2em;
 }
 
-.control-row.button-row {
-    flex: 0 0 auto;
+.note {
+    margin-top: 16px;
+    max-width: 440px;
+    font-size: 12px;
+    line-height: 1.7;
+}
+
+/* ---------------------------------------------------------------- 表示中の操作バー */
+
+#dock {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    z-index: 30;
     display: flex;
-    gap: 0.5rem;
+    align-items: stretch;
+    gap: 0;
+    width: max-content;
+    max-width: calc(100% - 32px);
+    flex-wrap: wrap;
+    border: var(--rule) solid var(--ink);
+    background: var(--paper);
+    opacity: 0;
+    transform: translateY(8px);
+    pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
 }
 
-.control-row.button-row button {
-    width: auto;
-    white-space: nowrap;
+body.running.dock-on #dock {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
 }
 
-.ui-layer #freezeBtn.active {
-    background: #fff;
-    color: #000;
-    outline: 2px solid #000;
-    outline-offset: -2px;
+#dock .brand,
+#dock .keys {
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
 }
 
-.key-hint {
-    flex-basis: 100%;
-    font-size: 0.7rem;
-    letter-spacing: 0.03em;
-    opacity: 0.7;
+#dock .brand {
+    font-family: var(--display);
+    font-stretch: 125%;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    font-size: 12px;
+    border-right: var(--rule) solid var(--ink);
 }
+
+#dock .keys {
+    opacity: 0.5;
+}
+
+#dock button {
+    padding: 12px 16px;
+    border: none;
+    border-right: 1.5px solid var(--ink);
+    background: var(--paper);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.2em;
+    cursor: pointer;
+}
+
+#dock button:hover,
+#dock button.active {
+    background: var(--ink);
+    color: var(--paper);
+}
+
+/* 展示モード：何も出さず、カーソルも消す */
+body.ui-hidden #dock,
+body.ui-hidden .lil-gui.autoPlace {
+    display: none !important;
+}
+
+body.running.ui-hidden,
+body.running:not(.dock-on) {
+    cursor: none;
+}
+
+/* ---------------------------------------------------------------- 状態表示 */
 
 .status-badge {
-    position: absolute;
-    top: 1.5rem;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0, 0, 0, 0.75);
-    color: #fff;
-    padding: 0.5rem 1rem;
-    font-size: 0.85rem;
-    font-weight: bold;
-    z-index: 100;
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 30;
+    padding: 6px 10px;
+    border: 1.5px solid var(--ink);
+    background: var(--paper);
+    font-size: 11px;
+    letter-spacing: 0.25em;
     pointer-events: none;
-    white-space: nowrap;
 }
 
 .status-badge.hidden {
     display: none;
 }
 
-/* 調整パネル（lil-gui） */
+/* ---------------------------------------------------------------- 調整パネル（lil-gui） */
+
 .lil-gui {
-    --font-family: 'Space Mono', monospace;
-    --background-color: rgba(255, 255, 255, 0.95);
+    --font-family: var(--mono);
+    --font-size: 11px;
+    --input-font-size: 11px;
+    --background-color: #fff;
     --text-color: #000;
     --title-background-color: #000;
     --title-text-color: #fff;
-    --widget-color: #e6e6e6;
-    --hover-color: #d4d4d4;
-    --focus-color: #c8c8c8;
+    --widget-color: #ececec;
+    --hover-color: #ddd;
+    --focus-color: #d2d2d2;
     --number-color: #000;
     --string-color: #000;
-    --name-width: 48%;
+    --widget-border-radius: 0;
+    --name-width: 52%;
+    --row-height: 22px;
+    --padding: 6px;
 }
 
 .lil-gui.autoPlace {
-    top: 5rem;
-    right: 1.5rem;
-    max-height: calc(100% - 19rem);
-    border: 2px solid #000;
-    box-shadow: 6px 6px 0 #000;
-    z-index: 50;
-    width: 300px;
+    top: 16px;
+    right: 16px;
+    width: 320px;
+    max-height: calc(100% - 96px);
+    border: var(--rule) solid var(--ink);
+    z-index: 40;
 }
 
-/* H キー / プレビューモードで UI を全部隠す（展示用） */
-body.ui-hidden .menu-bar,
-body.ui-hidden .controls,
-body.ui-hidden .lil-gui.autoPlace,
-body.preview-active .lil-gui.autoPlace {
-    display: none !important;
+.lil-gui .title {
+    letter-spacing: 0.3em;
+    font-weight: 500;
 }
 
-body.ui-hidden {
-    cursor: none;
+.lil-gui .lil-gui .title {
+    background: #fff;
+    color: #000;
+    border-top: 1.5px solid #000;
+    letter-spacing: 0.08em;
 }
 
-.controls label {
-    display: block;
-    font-size: 0.8rem;
-    font-weight: 700;
-    margin-bottom: 0.5rem;
-    letter-spacing: 0.05em;
-}
-
-.controls input[type="range"] {
-    width: 100%;
-    -webkit-appearance: none;
-    background: transparent;
-}
-
-.controls input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    height: 16px;
-    width: 16px;
-    background: #000;
-    cursor: pointer;
-    margin-top: -6px;
-    border-radius: 0;
-    /* Square thumb */
-}
-
-.controls input[type="range"]::-webkit-slider-runnable-track {
-    width: 100%;
-    height: 4px;
+.lil-gui .slider-fg,
+.lil-gui .fill {
     background: #000;
 }
 
-:where(.ui-layer) button {
-    width: 100%;
-    padding: 1rem;
-    background: #000;
-    color: #fff;
-    border: none;
-    font-family: inherit;
-    font-weight: 700;
-    font-size: 1rem;
-    cursor: pointer;
-    text-transform: uppercase;
+.lil-gui input[type="checkbox"]:checked:before {
+    color: #000;
 }
 
-:where(.ui-layer) button:hover {
-    background: #333;
-}
+@media (max-width: 640px) {
+    #dock .keys {
+        display: none;
+    }
 
-@media (max-width: 768px) {
-    .controls {
-        width: 100%;
-        box-shadow: none;
-        border-width: 2px 2px 0 0;
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        padding: 1rem;
-        border: none;
-        border-top: 2px solid #000;
+    #dock button {
+        padding: 10px 12px;
+        letter-spacing: 0.1em;
+    }
+
+    .lil-gui.autoPlace {
+        width: calc(100% - 32px);
     }
 }

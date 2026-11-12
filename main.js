@@ -37,23 +37,24 @@ const DEFAULTS = {
     smoothing: 0.5,        // 前フレームとのブレンド率（0 = ブレンドなし）
     shapeFps: 12,          // パスの形を更新する頻度（一枚ずつ描いたような見え方）
     // ③ 外側の輪郭
-    outerEpsPct: 0.6,      // 直線化の強さ（人物の高さに対する %）
+    outerEpsPct: 1.0,      // 直線化の強さ（人物の高さに対する %）
     minArea: 0.3,          // 描かない輪郭の大きさ（画面面積に対する %）
     showHoles: true,       // 内側の穴（中抜き）
     minHoleArea: 0.05,     // 穴の最小面積（%）
     // ④ 内側の線
     showParts: true,       // 部位の境目（髪・顔・手・持ち物の多角形）
     showEdges: true,       // 人物の内側のエッジ（服の境目・靴など）
-    innerMax: 40,          // 1人あたりの内側の線の上限
+    innerMax: 28,          // 1人あたりの内側の線の上限
     faceMax: 6,            // 顔の中の線の上限
-    innerEpsPct: 0.5,      // 内側の線の直線化（人物の高さに対する %）
-    edgeMinLenPct: 10,     // これより短いエッジは捨てる（人物の高さに対する %）
+    innerEpsPct: 0.8,      // 内側の線の直線化（人物の高さに対する %）
+    edgeMinLenPct: 13,     // これより短いエッジは捨てる（人物の高さに対する %）
     edgeLow: 60,           // Canny のしきい値
     edgeHigh: 160,
     edgeInsetPct: 2,       // 外側の輪郭からどれだけ内側でエッジを取るか（%）
     // ⑤ 見た目（参考画像20枚の実測：線の太さ＝画面の高さの約1.35%で一定、人物は高さの約83%）
     //   背景は白・線は黒で固定。1人＝1本の線。
-    lineWidthPct: 1.35,    // 線の太さ（画面の高さに対する %）
+    lineWidthPct: 1.8,     // 線の太さ（画面の高さに対する %）
+    minSegPct: 0.8,        // これより短い線分はまとめて、長い直線だけにする（画面の高さに対する %）
     spikeAngle: 11.5,      // これより鈍い角でトンガリ（miter の針）が出る。11.5° = miterLimit 10（Illustrator 標準）
     wedgeRate: 0.45,       // 内側の線のうち、くさび（細い三角＋先端のトンガリ）にする割合
     mirror: true,
@@ -63,7 +64,7 @@ const DEFAULTS = {
     refIndex: 21,
     refOpacity: 0.35,
 };
-const PARAMS_KEY = 'substantially.params.v3';
+const PARAMS_KEY = 'substantially.params.v4';
 
 function loadParams() {
     const p = { ...DEFAULTS };
@@ -88,8 +89,6 @@ const params = loadParams();
 const state = {
     streaming: false,
     opencvReady: false,
-    portraitMode: false,
-    recording: false,
     frozen: false,
     lastVideoTime: -1,
     lastTs: 0,
@@ -104,8 +103,8 @@ let wakeLock = null; // Wake Lock API for keeping screen awake
 const video = document.getElementById('webcam');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d', { alpha: false });
-const toggleBtn = document.getElementById('toggleBtn');
-const loader = document.getElementById('loader');
+const startBtn = document.getElementById('startBtn');
+const introNote = document.getElementById('introNote');
 const statusBadge = document.getElementById('statusBadge');
 
 // 1フレーム分の結果（座標は 0〜1 に正規化）:
@@ -128,8 +127,8 @@ function showBadge(text, ms = 0) {
 }
 function updateBadge() {
     if (!statusBadge) return;
-    if (modelLoading) { statusBadge.textContent = 'モデル読み込み中…'; statusBadge.classList.remove('hidden'); }
-    else if (state.frozen) { statusBadge.textContent = '■ FREEZE（Space で解除）'; statusBadge.classList.remove('hidden'); }
+    if (modelLoading) { statusBadge.textContent = 'LOADING MODEL'; statusBadge.classList.remove('hidden'); }
+    else if (state.frozen) { statusBadge.textContent = 'FREEZE'; statusBadge.classList.remove('hidden'); }
     else statusBadge.classList.add('hidden');
 }
 
@@ -143,7 +142,8 @@ function checkDependencies() {
             if (!state.opencvReady) {
                 console.log("OpenCV Ready");
                 state.opencvReady = true;
-                loader.classList.add('hidden');
+                startBtn.disabled = false;
+                startBtn.textContent = 'START';
             }
             return;
         }
@@ -157,12 +157,7 @@ checkDependencies();
 // 10秒経ってもロードが終わらない場合は画面にお知らせを出す
 setTimeout(() => {
     if (!state.opencvReady) {
-        const loaderText = document.querySelector('.loader-text');
-        if (loaderText) {
-            loaderText.innerHTML = "読み込みが完了しません。<br><br>1. インターネット接続を確認してください<br>2. F12キーを押して「Console」タブからエラーを確認してください<br>（file:// 環境ではなくローカルサーバーでの起動が必要な場合があります）";
-            loaderText.style.textAlign = "center";
-            loaderText.style.lineHeight = "1.6";
-        }
+        if (introNote) introNote.innerHTML = '読み込みが完了しません。インターネット接続を確認し、ローカルサーバーか公開URLで開いてください（file:// では動きません）。';
     }
 }, 10000);
 
@@ -687,13 +682,24 @@ function linkFigure(contours, lines, ax) {
         path.splice(i + 1, 0, ...seq);
         for (const other of elems) check(other, seq);
     }
-    // 同じ位置が続く点を除く（長さ 0 の線は角の向きが不安定になる）
-    const out = [path[0]];
+    // 短すぎる線分をまとめ、ほぼ一直線に並ぶ点も消す → 長い直線だけで描く
+    // （長さ 0 の線分も消える。角の向きが不安定になるのを防ぐ）
+    const minSeg = params.minSegPct / 100;
+    const len = (p, q) => Math.hypot((p[0] - q[0]) * ax, p[1] - q[1]);
+    let out = [path[0]];
     for (let k = 1; k < path.length; k++) {
-        const q = out[out.length - 1];
-        if (Math.abs(path[k][0] - q[0]) > 1e-6 || Math.abs(path[k][1] - q[1]) > 1e-6) out.push(path[k]);
+        if (len(path[k], out[out.length - 1]) >= minSeg || k === path.length - 1) out.push(path[k]);
     }
-    return out;
+    const straight = [out[0]];
+    for (let k = 1; k < out.length - 1; k++) {
+        const a = straight[straight.length - 1], b = out[k], c = out[k + 1];
+        const cross = ((b[0] - a[0]) * ax) * (c[1] - b[1]) - (b[1] - a[1]) * ((c[0] - b[0]) * ax);
+        const dot = ((b[0] - a[0]) * ax) * ((c[0] - b[0]) * ax) + (b[1] - a[1]) * (c[1] - b[1]);
+        if (dot > 0 && Math.abs(Math.atan2(cross, dot)) < 4 * Math.PI / 180) continue; // 4°未満の折れは直線にまとめる
+        straight.push(b);
+    }
+    straight.push(out[out.length - 1]);
+    return straight;
 }
 
 // 1人分のマスク → { h: 人物の高さ(0〜1), path: 1本の線, parts: 要素の数 }
@@ -969,150 +975,6 @@ if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
     navigator.mediaDevices.addEventListener('devicechange', getCameras);
 }
 
-const menuToggle = document.getElementById('menuToggle');
-const modeMenu = document.getElementById('modeMenu');
-
-menuToggle.addEventListener('click', (e) => {
-    e.stopPropagation();
-    modeMenu.classList.toggle('hidden');
-});
-
-document.addEventListener('click', (e) => {
-    if (!menuToggle.contains(e.target) && !modeMenu.contains(e.target)) {
-        modeMenu.classList.add('hidden');
-    }
-});
-
-// Mode buttons and state
-const previewModeBtn = document.getElementById('previewModeBtn');
-const portraitModeBtn = document.getElementById('portraitModeBtn');
-const recordingModeBtn = document.getElementById('recordingModeBtn');
-const recordingIndicator = document.getElementById('recordingIndicator');
-const recText = recordingIndicator.querySelector('.rec-text');
-
-let mediaRecorder;
-let fileStream;
-let frameIntervalId;
-
-// Preview Mode
-previewModeBtn.addEventListener('click', () => {
-    modeMenu.classList.add('hidden');
-    if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen().catch(err => {
-            console.error(`Error attempting to enable fullscreen: ${err.message}`);
-        });
-    }
-    document.body.classList.add('preview-active');
-});
-
-document.addEventListener('fullscreenchange', () => {
-    if (!document.fullscreenElement) {
-        document.body.classList.remove('preview-active');
-    }
-});
-
-// Portrait Mode
-portraitModeBtn.addEventListener('click', () => {
-    state.portraitMode = !state.portraitMode;
-    if (state.portraitMode) {
-        document.body.classList.add('portrait-active');
-        portraitModeBtn.classList.add('active');
-    } else {
-        document.body.classList.remove('portrait-active');
-        portraitModeBtn.classList.remove('active');
-    }
-    resizeCanvas();
-});
-
-// Recording Mode
-recordingModeBtn.addEventListener('click', async () => {
-    modeMenu.classList.add('hidden');
-    if (!state.recording) {
-        await startRecording();
-    } else {
-        await stopRecording();
-    }
-});
-
-async function startRecording() {
-    try {
-        const fileHandle = await window.showSaveFilePicker({
-            suggestedName: `record_${new Date().getTime()}.webm`,
-            types: [{
-                description: 'WebM Video',
-                accept: { 'video/webm': ['.webm'] },
-            }],
-        });
-
-        fileStream = await fileHandle.createWritable();
-
-        // 30fpsでキャンバスから直接ストリームを取得（手動フレーム要求はバグの温床なため撤廃）
-        const stream = canvas.captureStream(30);
-
-        const options = { mimeType: 'video/webm; codecs=vp9', videoBitsPerSecond: 2500000 };
-        try {
-            mediaRecorder = new MediaRecorder(stream, options);
-        } catch (e) {
-            console.warn("VP9 not supported, falling back to default webm");
-            mediaRecorder = new MediaRecorder(stream, { videoBitsPerSecond: 2500000 });
-        }
-
-        mediaRecorder.ondataavailable = async (e) => {
-            if (e.data && e.data.size > 0 && fileStream) {
-                try {
-                    await fileStream.write(e.data);
-                } catch (err) {
-                    console.error("Write error:", err);
-                }
-            }
-        };
-
-        // 1秒ごとにチャンクを書き出してデータ損失を防ぐ
-        mediaRecorder.start(1000);
-        
-        state.recording = true;
-        recordingModeBtn.textContent = "録画停止";
-        recordingModeBtn.classList.add('active');
-        
-        // UI Indicator
-        recText.textContent = "REC START";
-        recordingIndicator.classList.remove('hidden');
-        setTimeout(() => {
-            if (state.recording) {
-                recordingIndicator.classList.add('hidden');
-            }
-        }, 2000);
-
-    } catch (error) {
-        console.error("録画の開始に失敗したか、キャンセルされました:", error);
-    }
-}
-
-async function stopRecording() {
-    return new Promise((resolve) => {
-        if (mediaRecorder && state.recording) {
-            mediaRecorder.onstop = async () => {
-                if (fileStream) {
-                    try {
-                        await fileStream.close();
-                        fileStream = null;
-                    } catch (err) {
-                        console.error("ファイルのクローズに失敗しました:", err);
-                    }
-                }
-                resolve();
-            };
-            mediaRecorder.stop();
-            state.recording = false;
-            recordingModeBtn.textContent = "録画モード";
-            recordingModeBtn.classList.remove('active');
-            recordingIndicator.classList.add('hidden');
-        } else {
-            resolve();
-        }
-    });
-}
-
 // ----------------------------------------------------------------------------
 // Wake Lock (Prevent screen from sleeping)
 // ----------------------------------------------------------------------------
@@ -1199,7 +1061,8 @@ async function startCamera() {
         state.streaming = true;
         state.lastVideoTime = -1;
         tracks = [];
-        toggleBtn.textContent = "CAMERA STOP";
+        document.body.classList.add('running');
+        pokeDock();
         requestWakeLock();
         ensureModels();
     } catch (e) {
@@ -1211,7 +1074,7 @@ async function startCamera() {
 function stopCamera() {
     if (!state.streaming) return;
     state.streaming = false;
-    toggleBtn.textContent = "CAMERA START";
+    document.body.classList.remove('running');
 
     const stream = video.srcObject;
     if (stream) stream.getTracks().forEach(t => t.stop());
@@ -1224,9 +1087,10 @@ function stopCamera() {
     if (!state.frozen) figures = [];
 }
 
-toggleBtn.addEventListener('click', () => {
-    if (state.streaming) stopCamera();
-    else startCamera();
+startBtn.addEventListener('click', () => { if (!state.streaming) startCamera(); });
+document.getElementById('stopBtn').addEventListener('click', () => {
+    toggleFreeze(false);
+    stopCamera();
 });
 
 // ----------------------------------------------------------------------------
@@ -1235,14 +1099,7 @@ toggleBtn.addEventListener('click', () => {
 
 function resizeCanvas() {
     const dpr = window.devicePixelRatio || 1;
-    let w = window.innerWidth, h = window.innerHeight;
-    if (state.portraitMode) {
-        h = w * 16 / 9;
-        if (h > window.innerHeight) {
-            h = window.innerHeight;
-            w = h * 9 / 16;
-        }
-    }
+    const w = window.innerWidth, h = window.innerHeight;
     canvas.style.width = w + 'px';
     canvas.style.height = h + 'px';
     canvas.width = Math.round(w * dpr);
@@ -1425,24 +1282,49 @@ function toggleFullscreen() {
     else document.documentElement.requestFullscreen().catch(err => console.error(err));
 }
 
+// H：展示モード（操作バーも調整パネルも出さない、カーソルも消す）
 function toggleUI() {
     document.body.classList.toggle('ui-hidden');
+    if (document.body.classList.contains('ui-hidden') && gui) gui.hide();
+}
+
+function toggleTune(force) {
+    if (!gui) return;
+    const show = typeof force === 'boolean' ? force : gui._hidden;
+    gui.show(show);
+    document.getElementById('tuneBtn').classList.toggle('active', show);
+    if (show) document.body.classList.remove('ui-hidden');
 }
 
 function refreshGUI() {
     if (gui) gui.controllersRecursive().forEach(c => c.updateDisplay());
 }
 
-const freezeBtn = document.getElementById('freezeBtn');
-if (freezeBtn) freezeBtn.addEventListener('click', () => toggleFreeze());
-const svgBtn = document.getElementById('svgBtn');
-if (svgBtn) svgBtn.addEventListener('click', exportSVG);
+// 操作バー：マウスを動かすと現れ、しばらく動かさないと消える
+const dock = document.getElementById('dock');
+let dockTimer = null;
+function pokeDock() {
+    document.body.classList.add('dock-on');
+    clearTimeout(dockTimer);
+    dockTimer = setTimeout(() => {
+        if (dock.matches(':hover')) return pokeDock();
+        document.body.classList.remove('dock-on');
+    }, 2500);
+}
+document.addEventListener('mousemove', pokeDock);
+document.addEventListener('touchstart', pokeDock, { passive: true });
+
+document.getElementById('freezeBtn').addEventListener('click', () => toggleFreeze());
+document.getElementById('svgBtn').addEventListener('click', exportSVG);
+document.getElementById('fullBtn').addEventListener('click', toggleFullscreen);
+document.getElementById('tuneBtn').addEventListener('click', () => toggleTune());
 
 document.addEventListener('keydown', (e) => {
     const tag = (e.target && e.target.tagName) || '';
     if (/INPUT|SELECT|TEXTAREA/.test(tag) || e.metaKey || e.ctrlKey || e.altKey) return;
     switch (e.key.toLowerCase()) {
         case 'h': toggleUI(); break;
+        case 'g': toggleTune(); break;
         case ' ': e.preventDefault(); toggleFreeze(); break;
         case 's': exportSVG(); break;
         case 'f': toggleFullscreen(); break;
@@ -1464,7 +1346,8 @@ function onModelChange() {
 
 function buildGUI() {
     if (!window.lil || !window.lil.GUI) return;
-    gui = new lil.GUI({ title: '調整パネル（H で表示切替）' });
+    gui = new lil.GUI({ title: 'TUNE' });
+    gui.hide();
 
     const fSeg = gui.addFolder('① 切り抜き');
     fSeg.add(params, 'segMode', {
@@ -1504,7 +1387,8 @@ function buildGUI() {
     fInner.add(params, 'edgeInsetPct', 0, 8, 0.5).name('輪郭からの内側幅（%）');
 
     const fLook = gui.addFolder('⑤ 見た目');
-    fLook.add(params, 'lineWidthPct', 0.3, 4, 0.05).name('線の太さ（画面の高さの%）');
+    fLook.add(params, 'lineWidthPct', 0.3, 6, 0.05).name('線の太さ（画面の高さの%）');
+    fLook.add(params, 'minSegPct', 0, 4, 0.05).name('最短の線分（%）');
     fLook.add(params, 'spikeAngle', 2, 60, 0.5).name('トンガリが出る角度（°）');
     fLook.add(params, 'wedgeRate', 0, 1, 0.05).name('くさびの割合');
     fLook.add(params, 'mirror').name('左右反転');

@@ -5,79 +5,66 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SUBSTANTIALLY</title>
-    <link rel="stylesheet" href="style.css?v=8">
-    <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap"
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,800&family=IBM+Plex+Mono:wght@400;500&display=swap"
         rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=9">
     <!-- 調整パネル（MediaPipe tasks-vision は main.js から読み込み） -->
     <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
 </head>
 
 <body>
-    <div id="loader">
-        <div class="loader-text">Loading System...</div>
-    </div>
-
     <canvas id="canvas"></canvas>
-
-    <!-- Hidden video for capture -->
     <video id="webcam" autoplay playsinline muted></video>
 
-    <div class="ui-layer">
-        <nav class="menu-bar">
-            <button id="menuToggle" class="icon-button" title="Menu">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="square" stroke-linejoin="miter">
-                    <line x1="3" y1="12" x2="21" y2="12"></line>
-                    <line x1="3" y1="6" x2="21" y2="6"></line>
-                    <line x1="3" y1="18" x2="21" y2="18"></line>
-                </svg>
-            </button>
-            <div id="modeMenu" class="mode-menu hidden">
-                <button id="previewModeBtn">プレビューモード</button>
-                <button id="portraitModeBtn">縦画面モード</button>
-                <button id="recordingModeBtn">録画モード</button>
+    <!-- はじめの画面 -->
+    <section id="intro">
+        <div class="intro-inner">
+            <svg class="mark" viewBox="0 0 240 60" aria-hidden="true">
+                <polyline points="6,48 92,40 104,8 118,46 234,36" fill="none" stroke="#000" stroke-width="9"
+                    stroke-linejoin="miter" stroke-miterlimit="10" stroke-linecap="butt" />
+            </svg>
+            <h1>SUBSTANTIALLY</h1>
+            <p class="sub">実体として、実質的に</p>
+
+            <button id="startBtn" class="start" disabled>LOADING</button>
+
+            <div class="camera">
+                <span class="label">CAMERA</span>
+                <select id="cameraSelect">
+                    <option value="">デフォルト</option>
+                </select>
+                <button id="cameraRescanBtn" type="button" class="rescan" title="カメラを再検索">↻</button>
             </div>
-        </nav>
-
-        <div id="statusBadge" class="status-badge hidden"></div>
-
-        <div id="recordingIndicator" class="recording-indicator hidden">
-            <span class="red-dot"></span> <span class="rec-text">REC 00:00</span>
+            <details id="cameraHint" class="camera-hint hidden">
+                <summary>ニコンのカメラが表示されない場合</summary>
+                <ol>
+                    <li>カメラをUSBで接続し電源をON（Z f / Z6III / Z8 / Z9 等は本体メニューで「USB接続：UVC/UAC」を選択）</li>
+                    <li>それ以外の機種はPCに「Nikon Webcam Utility」をインストールし、カメラを動画モードにする</li>
+                    <li>Nikon NX Tether等、カメラを使う他のアプリを終了する</li>
+                    <li>Chrome / Edge でこのページを開き、カメラを「許可」</li>
+                    <li>↻ ボタンで再検索（それでも出ない場合はブラウザを再起動）</li>
+                </ol>
+            </details>
+            <p id="introNote" class="note"></p>
         </div>
+    </section>
 
-        <div class="controls">
-            <div class="control-row">
-                <label>CAMERA (カメラ)</label>
-                <div class="camera-select-wrap">
-                    <select id="cameraSelect">
-                        <option value="">デフォルト</option>
-                    </select>
-                    <button id="cameraRescanBtn" type="button" title="カメラを再検索">↻</button>
-                </div>
-                <details id="cameraHint" class="camera-hint hidden">
-                    <summary>ニコンのカメラが表示されない場合</summary>
-                    <ol>
-                        <li>カメラをUSBで接続し電源をON（Z f / Z6III / Z8 / Z9 等は本体メニューで「USB接続：UVC/UAC」を選択）</li>
-                        <li>それ以外の機種はPCに「Nikon Webcam Utility」をインストールし、カメラを動画モードにする</li>
-                        <li>Nikon NX Tether等、カメラを使う他のアプリを終了する</li>
-                        <li>Chrome / Edge でこのページを開き、カメラを「許可」</li>
-                        <li>↻ ボタンで再検索（それでも出ない場合はブラウザを再起動）</li>
-                    </ol>
-                </details>
-            </div>
-            <div class="control-row button-row">
-                <button id="toggleBtn">CAMERA START</button>
-                <button id="freezeBtn" type="button">FREEZE</button>
-                <button id="svgBtn" type="button">SVG</button>
-            </div>
-            <p class="key-hint">H: UI表示切替 ／ Space: 静止 ／ S: SVG保存 ／ F: フルスクリーン ／ R: 参考画像を重ねる</p>
-        </div>
-    </div>
+    <!-- 表示中の操作バー（マウスを動かすと現れる） -->
+    <nav id="dock">
+        <span class="brand">SUBSTANTIALLY</span>
+        <button id="freezeBtn" type="button" title="静止（Space）">FREEZE</button>
+        <button id="svgBtn" type="button" title="SVG 書き出し（S）">SVG</button>
+        <button id="fullBtn" type="button" title="フルスクリーン（F）">FULL</button>
+        <button id="tuneBtn" type="button" title="調整パネル（G）">TUNE</button>
+        <button id="stopBtn" type="button" title="カメラを止める">STOP</button>
+        <span class="keys">H 展示モード</span>
+    </nav>
 
-    <script src="main.js?v=8"></script>
+    <div id="statusBadge" class="status-badge hidden"></div>
+
+    <script src="main.js?v=9"></script>
     <!-- OpenCV.js 4.10（旧 4.2 ビルドは MediaPipe と同じページで読むと固まるため変更） -->
     <script async src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js"
         type="text/javascript"></script>
